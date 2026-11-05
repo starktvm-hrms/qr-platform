@@ -17,6 +17,14 @@ die()  { printf '\033[1;31m[x] %s\033[0m\n' "$*"; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "Run as root (sudo bash $0)"
 export DEBIAN_FRONTEND=noninteractive
 
+# A broken third-party apt source (common on new Ubuntu releases) must not stop the install.
+APT_UPDATED=0
+apt_update() {
+  [ "$APT_UPDATED" -eq 1 ] && return 0
+  apt-get update -qq || warn "apt-get update reported errors (usually a third-party repository without packages for this Ubuntu release). Continuing."
+  APT_UPDATED=1
+}
+
 # ---------------------------------------------------------------- Node.js 22
 log "Checking Node.js"
 need_node=1
@@ -27,15 +35,34 @@ if command -v node >/dev/null 2>&1; then
   echo "Found Node $v"
 fi
 if [ "$need_node" -eq 1 ]; then
-  log "Installing Node.js 22 (NodeSource)"
-  apt-get update -qq
-  apt-get install -y -qq ca-certificates curl gnupg >/dev/null
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
-  apt-get install -y -qq nodejs >/dev/null
-  echo "Installed Node $(node -v)"
+  # Official binary from nodejs.org: works on any glibc distro release and doesn't depend on apt.
+  log "Installing Node.js 22 from nodejs.org"
+  case "$(uname -m)" in
+    x86_64) NARCH=x64 ;;
+    aarch64|arm64) NARCH=arm64 ;;
+    *) die "Unsupported CPU architecture: $(uname -m)" ;;
+  esac
+  NODE_DIST=https://nodejs.org/dist/latest-v22.x
+  SUMS=$(curl -fsSL "$NODE_DIST/SHASUMS256.txt") || die "Could not reach nodejs.org"
+  NODE_TGZ=$(printf '%s\n' "$SUMS" | awk -v a="linux-$NARCH.tar.gz" '$2 ~ a"$" {print $2}')
+  [ -n "$NODE_TGZ" ] || die "Could not find a Node.js 22 build for linux-$NARCH"
+  NTMP=$(mktemp -d)
+  curl -fsSL -o "$NTMP/$NODE_TGZ" "$NODE_DIST/$NODE_TGZ"
+  ( cd "$NTMP" && printf '%s\n' "$SUMS" | grep " $NODE_TGZ\$" | sha256sum -c --quiet - ) || die "Node.js download failed checksum verification"
+  rm -rf /opt/nodejs && mkdir -p /opt/nodejs
+  tar -xzf "$NTMP/$NODE_TGZ" -C /opt/nodejs --strip-components=1
+  rm -rf "$NTMP"
+  ln -sf /opt/nodejs/bin/node /usr/local/bin/node
+  ln -sf /opt/nodejs/bin/npm /usr/local/bin/npm
+  ln -sf /opt/nodejs/bin/npx /usr/local/bin/npx
+  hash -r
+  NODE_BIN=/opt/nodejs/bin/node
+  NPM_BIN=/opt/nodejs/bin/npm
+  echo "Installed Node $("$NODE_BIN" -v) to /opt/nodejs"
+else
+  NODE_BIN=$(command -v node)
+  NPM_BIN=$(command -v npm)
 fi
-NODE_BIN=$(command -v node)
-NPM_BIN=$(command -v npm)
 
 # ---------------------------------------------------------------- app files
 log "Installing app to $APP_DIR"
@@ -127,7 +154,7 @@ get_cert() { # $1 = certbot plugin (nginx|apache)
     CERT_NOTE="DNS for $DOMAIN does not point to $SERVER_IP yet. Re-run this script once it does to get HTTPS."
     return
   fi
-  command -v certbot >/dev/null || { apt-get update -qq; apt-get install -y -qq certbot "python3-certbot-$1" >/dev/null; }
+  command -v certbot >/dev/null || { apt_update; apt-get install -y -qq certbot "python3-certbot-$1" >/dev/null; }
   dpkg -s "python3-certbot-$1" >/dev/null 2>&1 || apt-get install -y -qq "python3-certbot-$1" >/dev/null
   certbot --"$1" -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --redirect --keep-until-expiring \
     || CERT_NOTE="certbot failed. The site works over HTTP; check the certbot output above."
@@ -209,7 +236,7 @@ EOF
     ;;
   "")
     log "No web server found; installing Caddy (automatic HTTPS)"
-    apt-get update -qq; apt-get install -y -qq caddy >/dev/null
+    apt_update; apt-get install -y -qq caddy >/dev/null
     CF=/etc/caddy/Caddyfile
     if grep -q '/usr/share/caddy' "$CF" 2>/dev/null; then : > "$CF"; fi
     grep -q "^$DOMAIN {" "$CF" 2>/dev/null || printf '%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$DOMAIN" "$PORT" >> "$CF"
