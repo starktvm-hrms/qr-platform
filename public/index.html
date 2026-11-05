@@ -14,6 +14,7 @@
     </div>
     <nav class="tabs" role="tablist">
       <button class="tab active" data-view="static" role="tab">Static QR</button>
+      <button class="tab" data-view="vcard" role="tab">vCard</button>
       <button class="tab" data-view="dynamic" role="tab">Dynamic QR</button>
     </nav>
   </header>
@@ -33,7 +34,6 @@
             <button class="chip active" data-type="url">URL</button>
             <button class="chip" data-type="text">Text</button>
             <button class="chip" data-type="wifi">Wi-Fi</button>
-            <button class="chip" data-type="vcard">Contact</button>
             <button class="chip" data-type="email">Email</button>
             <button class="chip" data-type="sms">SMS</button>
             <button class="chip" data-type="phone">Phone</button>
@@ -58,6 +58,81 @@
       </div>
     </section>
 
+    <!-- ================= vCARD ================= -->
+    <section id="view-vcard" class="view">
+      <div class="intro">
+        <h1 id="vc-title">vCard QR code</h1>
+        <p>Share your contact details. Scanning opens a mobile contact card with an <b>Add to contacts</b> button. You can edit it any time and track scans, or tick <i>Static QR Code</i> to put the contact straight into the code.</p>
+      </div>
+
+      <div class="layout">
+        <form class="panel vc-form" id="vc-form" autocomplete="off" novalidate>
+          <div class="fl"><input name="firstName" placeholder=" " maxlength="80" /><span>First Name</span><i class="help" title="Shown as the contact's first name.">?</i></div>
+          <div class="fl"><input name="lastName" placeholder=" " maxlength="80" /><span>Last Name</span><i class="help" title="Shown as the contact's last name.">?</i></div>
+
+          <h4>Corporate Information <em>– optional</em></h4>
+          <div class="fl"><input name="company" placeholder=" " maxlength="120" /><span>Company Name</span><i class="help" title="Organisation the contact works for.">?</i></div>
+          <div class="fl"><input name="jobTitle" placeholder=" " maxlength="120" /><span>Job Title</span><i class="help" title="For example: Sales Manager.">?</i></div>
+
+          <h4>Personal Information <em>– optional</em></h4>
+          <input type="file" id="vc-photo-input" accept="image/jpeg,image/png,image/webp" hidden />
+          <div class="vc-photo" id="vc-photo-empty">
+            <button type="button" class="upload" id="vc-photo-btn">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2zm7-18-5.5 5.5 1.42 1.42L11 5.83V16h2V5.83l3.08 3.09 1.42-1.42L12 2z"/></svg>
+              Upload Image
+            </button>
+          </div>
+          <div class="vc-photo has" id="vc-photo-set" hidden>
+            <img id="vc-photo-img" alt="Contact photo" />
+            <div class="row"><button type="button" class="btn sm" id="vc-photo-change">Change</button><button type="button" class="btn sm danger" id="vc-photo-remove">Remove</button></div>
+          </div>
+          <div class="dob-row">
+            <div class="fl small-fl"><input type="date" name="birthday" id="vc-dob" /><span class="up">Date of birth</span></div>
+            <i class="help" title="Added to the contact as their birthday.">?</i>
+          </div>
+
+          <h4>Contacts <em>– optional</em></h4>
+          <div id="vc-phones" class="multi"></div>
+          <div id="vc-emails" class="multi"></div>
+          <div id="vc-websites" class="multi"></div>
+          <div class="fl"><input name="address" placeholder=" " maxlength="300" /><span>Address</span><i class="help" title="Opens in Google Maps when tapped on the card.">?</i></div>
+
+          <h4>vCard Design <em>– optional</em></h4>
+          <label class="color-box">
+            <span><small>Card color</small><b id="vc-color-hex">#4F46E5</b></span>
+            <input type="color" name="color" id="vc-color" value="#4f46e5" />
+          </label>
+
+          <label class="inline static-toggle">
+            <input type="checkbox" id="vc-static" /> Static QR Code
+            <i class="help info" title="Static: the contact is stored inside the QR itself. Works offline, but can't be edited or tracked after printing, and the photo isn't included. Leave unticked for an editable, trackable contact card page.">i</i>
+          </label>
+
+          <div class="fl" id="vc-name-wrap"><input name="qrName" placeholder=" " maxlength="120" /><span>Name your QR (optional)</span><i class="help" title="Only you see this name, in your Dynamic QR list. Defaults to the contact's name.">?</i></div>
+
+          <details class="qr-style">
+            <summary>QR code style</summary>
+            <div id="vc-design"></div>
+          </details>
+
+          <p class="error" id="vc-error"></p>
+        </form>
+
+        <div class="panel preview-panel vc-preview">
+          <div class="seg" id="vc-preview-tabs">
+            <button type="button" class="active" data-p="card">Card preview</button>
+            <button type="button" data-p="qr">QR code</button>
+          </div>
+          <div class="phone" id="vc-card-wrap"><iframe id="vc-card" title="Contact card preview" sandbox=""></iframe></div>
+          <div id="vc-qr-wrap" hidden>
+            <div class="preview"><img id="vc-qr" alt="QR preview" /><p class="muted" id="vc-qr-empty"></p></div>
+            <p class="muted small" id="vc-qr-note"></p>
+          </div>
+          <div class="row" id="vc-actions"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ================= DYNAMIC ================= -->
     <section id="view-dynamic" class="view">
       <div class="intro">
@@ -77,6 +152,7 @@
             <div id="dyn-design"></div>
             <p class="error" id="dyn-error"></p>
             <button class="btn primary" type="submit">Create dynamic QR</button>
+            <p class="muted small" style="margin:0">Sharing contact details? Use the <a href="#vcard" data-goto="vcard">vCard</a> tab.</p>
           </form>
         </div>
 
@@ -99,6 +175,7 @@
 
   <div class="toast" id="toast" hidden></div>
 
+  <script src="vcard.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

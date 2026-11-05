@@ -44,4 +44,10 @@ db.exec(`
   );
 `);
 
+// --- migrations for databases created by earlier versions ---
+const cols = db.prepare('PRAGMA table_info(dynamic_codes)').all().map((c) => c.name);
+// type: 'url' (redirect) or 'vcard' (hosted contact card); payload: JSON for non-url types
+if (!cols.includes('type')) db.exec("ALTER TABLE dynamic_codes ADD COLUMN type TEXT NOT NULL DEFAULT 'url'");
+if (!cols.includes('payload')) db.exec('ALTER TABLE dynamic_codes ADD COLUMN payload TEXT');
+
 module.exports = db;

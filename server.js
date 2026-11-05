@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const path = require('path');
 const QRCode = require('qrcode');
 const db = require('./db');
+const VCard = require('./public/vcard');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -13,7 +14,7 @@ const IP_SALT = process.env.IP_SALT || crypto.randomBytes(16).toString('hex');
 // Only trust X-Forwarded-* from a reverse proxy on this machine.
 app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 app.disable('x-powered-by');
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({ limit: '1mb' })); // vCard photos are sent as data URLs
 
 // ---------- helpers ----------
 
@@ -73,10 +74,17 @@ function parseUA(ua = '') {
   return { device, os, browser };
 }
 
-function serialize(row, req) {
+function serialize(row, req, { full = false } = {}) {
+  let vcard;
+  if (row.type === 'vcard') {
+    vcard = JSON.parse(row.payload || '{}');
+    if (!full) { vcard.hasPhoto = !!vcard.photo; delete vcard.photo; } // keep list responses small
+  }
   return {
     id: row.id,
     code: row.code,
+    type: row.type || 'url',
+    vcard,
     name: row.name,
     targetUrl: row.target_url,
     active: !!row.active,
@@ -119,10 +127,27 @@ const findByCode = db.prepare('SELECT * FROM dynamic_codes WHERE code = ?');
 const insertScan = db.prepare(`INSERT INTO scans (code_id, visitor, device, os, browser, referrer, language)
                                VALUES (?, ?, ?, ?, ?, ?, ?)`);
 
-app.get('/r/:code', (req, res) => {
+function liveCode(req, res) {
   const row = findByCode.get(req.params.code);
-  if (!row) return res.status(404).send(page('QR code not found', 'This code does not exist or was deleted.'));
-  if (!row.active) return res.status(410).send(page('QR code paused', 'The owner of this QR code has paused it.'));
+  if (!row) { res.status(404).send(page('QR code not found', 'This code does not exist or was deleted.')); return null; }
+  if (!row.active) { res.status(410).send(page('QR code paused', 'The owner of this QR code has paused it.')); return null; }
+  return row;
+}
+
+// .vcf download for vCard codes (not counted as a scan)
+app.get('/r/:code/vcf', (req, res) => {
+  const row = liveCode(req, res);
+  if (!row) return;
+  if (row.type !== 'vcard') return res.status(404).send(page('Not found', 'This QR code is not a contact card.'));
+  const card = JSON.parse(row.payload || '{}');
+  const file = VCard.fullName(card).replace(/[^\w .-]+/g, '').trim().replace(/\s+/g, '_') || 'contact';
+  res.set('Cache-Control', 'no-store');
+  res.type('text/vcard; charset=utf-8').attachment(`${file}.vcf`).send(VCard.build(card));
+});
+
+app.get('/r/:code', (req, res) => {
+  const row = liveCode(req, res);
+  if (!row) return;
 
   const ua = req.get('user-agent') || '';
   const { device, os, browser } = parseUA(ua);
@@ -134,6 +159,12 @@ app.get('/r/:code', (req, res) => {
   } catch (e) { console.error('scan log failed', e); }
 
   res.set('Cache-Control', 'no-store');
+  if (row.type === 'vcard') {
+    // Hosted contact card. No scripts at all, so lock it down with a strict CSP.
+    res.set('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    res.set('X-Content-Type-Options', 'nosniff');
+    return res.type('html').send(VCard.renderPage(JSON.parse(row.payload || '{}'), `/r/${row.code}/vcf`));
+  }
   res.redirect(302, row.target_url);
 });
 
@@ -183,10 +214,19 @@ api.get('/dynamic', (req, res) => {
 });
 
 api.post('/dynamic', (req, res) => {
-  const name = String(req.body.name || '').trim().slice(0, 120);
-  const url = validUrl(req.body.targetUrl);
-  if (!name) return res.status(400).json({ error: 'Name is required' });
-  if (!url) return res.status(400).json({ error: 'Destination must be a valid http(s) URL' });
+  const type = req.body.type === 'vcard' ? 'vcard' : 'url';
+  let name = String(req.body.name || '').trim().slice(0, 120);
+  let url = '', payload = null;
+  if (type === 'vcard') {
+    const { card, errors } = VCard.normalize(req.body.vcard);
+    if (errors.length) return res.status(400).json({ error: errors.join('. ') });
+    payload = JSON.stringify(card);
+    name = name || VCard.fullName(card).slice(0, 120);
+  } else {
+    url = validUrl(req.body.targetUrl);
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (!url) return res.status(400).json({ error: 'Destination must be a valid http(s) URL' });
+  }
 
   let code = String(req.body.code || '').trim();
   if (code) {
@@ -195,10 +235,10 @@ api.post('/dynamic', (req, res) => {
   } else {
     do { code = newCode(); } while (findByCode.get(code));
   }
-  const info = db.prepare('INSERT INTO dynamic_codes (code, name, target_url, style) VALUES (?, ?, ?, ?)')
-    .run(code, name, url, JSON.stringify(cleanStyle(req.body.style)));
-  db.prepare('INSERT INTO url_history (code_id, target_url) VALUES (?, ?)').run(info.lastInsertRowid, url);
-  res.status(201).json(serialize(getStmt.get(info.lastInsertRowid), req));
+  const info = db.prepare('INSERT INTO dynamic_codes (code, name, target_url, style, type, payload) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(code, name, url, JSON.stringify(cleanStyle(req.body.style)), type, payload);
+  if (type === 'url') db.prepare('INSERT INTO url_history (code_id, target_url) VALUES (?, ?)').run(info.lastInsertRowid, url);
+  res.status(201).json(serialize(getStmt.get(info.lastInsertRowid), req, { full: true }));
 });
 
 api.get('/dynamic/:id', (req, res) => {
@@ -222,7 +262,7 @@ api.get('/dynamic/:id', (req, res) => {
   ).all(id);
 
   res.json({
-    ...serialize(row, req),
+    ...serialize(row, req, { full: true }),
     stats: {
       series,
       devices: breakdown('device'),
@@ -240,17 +280,23 @@ api.patch('/dynamic/:id', (req, res) => {
   const name = req.body.name !== undefined ? String(req.body.name).trim().slice(0, 120) : row.name;
   if (!name) return res.status(400).json({ error: 'Name cannot be empty' });
   let url = row.target_url;
-  if (req.body.targetUrl !== undefined) {
+  let payload = row.payload;
+  if (row.type === 'vcard' && req.body.vcard !== undefined) {
+    const { card, errors } = VCard.normalize(req.body.vcard);
+    if (errors.length) return res.status(400).json({ error: errors.join('. ') });
+    payload = JSON.stringify(card);
+  }
+  if (row.type !== 'vcard' && req.body.targetUrl !== undefined) {
     url = validUrl(req.body.targetUrl);
     if (!url) return res.status(400).json({ error: 'Destination must be a valid http(s) URL' });
   }
   const active = req.body.active !== undefined ? (req.body.active ? 1 : 0) : row.active;
   const style = req.body.style !== undefined ? JSON.stringify(cleanStyle(req.body.style)) : row.style;
 
-  db.prepare(`UPDATE dynamic_codes SET name = ?, target_url = ?, active = ?, style = ?, updated_at = datetime('now') WHERE id = ?`)
-    .run(name, url, active, style, row.id);
+  db.prepare(`UPDATE dynamic_codes SET name = ?, target_url = ?, active = ?, style = ?, payload = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(name, url, active, style, payload, row.id);
   if (url !== row.target_url) db.prepare('INSERT INTO url_history (code_id, target_url) VALUES (?, ?)').run(row.id, url);
-  res.json(serialize(getStmt.get(row.id), req));
+  res.json(serialize(getStmt.get(row.id), req, { full: true }));
 });
 
 api.delete('/dynamic/:id', (req, res) => {

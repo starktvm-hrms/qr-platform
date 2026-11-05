@@ -207,23 +207,6 @@ const STATIC_TYPES = {
       return `WIFI:T:${f.auth};S:${e(f.ssid)};${f.auth !== 'nopass' ? `P:${e(f.pass)};` : ''}${f.hidden ? 'H:true;' : ''};`;
     },
   },
-  vcard: {
-    fields: `
-      <div class="grid2"><label>First name<input name="first" /></label><label>Last name<input name="last" /></label></div>
-      <div class="grid2"><label>Company<input name="org" /></label><label>Job title<input name="title" /></label></div>
-      <div class="grid2"><label>Phone<input name="tel" type="tel" /></label><label>Email<input name="email" type="email" /></label></div>
-      <label>Website<input name="url" /></label>
-      <label>Address<input name="adr" placeholder="Street, City, Country" /></label>`,
-    build: (f) => {
-      if (!f.first && !f.last && !f.org) return '';
-      const e = (s) => String(s || '').replace(/([\\;,])/g, '\\$1').replace(/\n/g, '\\n');
-      return ['BEGIN:VCARD', 'VERSION:3.0',
-        `N:${e(f.last)};${e(f.first)};;;`, `FN:${e([f.first, f.last].filter(Boolean).join(' ') || f.org)}`,
-        f.org && `ORG:${e(f.org)}`, f.title && `TITLE:${e(f.title)}`,
-        f.tel && `TEL;TYPE=CELL:${f.tel}`, f.email && `EMAIL:${f.email}`,
-        f.url && `URL:${f.url}`, f.adr && `ADR:;;${e(f.adr)};;;;`, 'END:VCARD'].filter(Boolean).join('\n');
-    },
-  },
   email: {
     fields: `
       <label>To<input name="to" type="email" /></label>
@@ -327,7 +310,7 @@ async function loadDynamic() {
 
 function renderList() {
   const q = $('#dyn-search').value.trim().toLowerCase();
-  const list = dynCodes.filter((c) => !q || [c.name, c.targetUrl, c.code].some((s) => s.toLowerCase().includes(q)));
+  const list = dynCodes.filter((c) => !q || [c.name, c.targetUrl, c.code, c.vcard ? VCard.fullName(c.vcard) : ''].some((s) => s.toLowerCase().includes(q)));
   const el = $('#dyn-list');
   if (!list.length) {
     el.innerHTML = `<div class="empty">${dynCodes.length ? 'No codes match your search.' : 'No dynamic codes yet. Create your first one on the left.'}</div>`;
@@ -337,13 +320,16 @@ function renderList() {
     <div class="card" data-id="${c.id}">
       <img src="${qrUrl(c.shortUrl, styleOf(c), 'png', 160)}" alt="" loading="lazy" />
       <div style="min-width:0">
-        <div class="title">${esc(c.name)} <span class="badge ${c.active ? '' : 'off'}">${c.active ? 'Active' : 'Paused'}</span></div>
-        <div class="meta">→ <a href="${esc(c.targetUrl)}" target="_blank" rel="noopener">${esc(c.targetUrl)}</a></div>
+        <div class="title">${esc(c.name)} ${c.type === 'vcard' ? '<span class="badge vc">vCard</span>' : ''}<span class="badge ${c.active ? '' : 'off'}">${c.active ? 'Active' : 'Paused'}</span></div>
+        ${c.type === 'vcard'
+          ? `<div class="meta">Contact card · ${esc(VCard.fullName(c.vcard))}${c.vcard.company ? ' · ' + esc(c.vcard.company) : ''}</div>`
+          : `<div class="meta">→ <a href="${esc(c.targetUrl)}" target="_blank" rel="noopener">${esc(c.targetUrl)}</a></div>`}
         <div class="meta">${esc(c.shortUrl)}</div>
       </div>
       <div class="scans"><b>${c.totalScans}</b> scans</div>
       <div class="actions">
-        <button class="btn sm" data-act="open">Edit &amp; stats</button>
+        <button class="btn sm" data-act="open">${c.type === 'vcard' ? 'Stats' : 'Edit &amp; stats'}</button>
+        ${c.type === 'vcard' ? '<button class="btn sm" data-act="editvc">Edit vCard</button>' : ''}
         <button class="btn sm" data-act="copy">Copy link</button>
         <button class="btn sm" data-act="png">PNG</button>
         <button class="btn sm" data-act="svg">SVG</button>
@@ -363,6 +349,7 @@ $('#dyn-list').addEventListener('click', (e) => {
 async function codeAction(act, c) {
   try {
     if (act === 'open') return openDrawer(c.id);
+    if (act === 'editvc') { closeDrawer(); return editVcard(c.id); }
     if (act === 'copy') { await navigator.clipboard.writeText(c.shortUrl); return toast('Link copied'); }
     if (act === 'png') return download(URL.createObjectURL(await renderPng(c.shortUrl, { ...styleOf(c), size: 1024 })), `${slugify(c.name)}.png`);
     if (act === 'svg') return download(URL.createObjectURL(await renderSvg(c.shortUrl, styleOf(c))), `${slugify(c.name)}.svg`);
@@ -370,6 +357,7 @@ async function codeAction(act, c) {
     if (act === 'delete') {
       if (!confirm(`Delete "${c.name}"? Printed copies of this QR will stop working.`)) return;
       await api(`/dynamic/${c.id}`, { method: 'DELETE' }); toast('Deleted'); closeDrawer();
+      if (vcEditId === c.id) resetVcard();
     }
     await loadDynamic();
     if (!$('#drawer').hidden && act === 'toggle') openDrawer(c.id);
@@ -442,10 +430,14 @@ async function openDrawer(id) {
 
     <form class="fields" id="edit-form">
       <label>Name<input name="name" value="${esc(d.name)}" required maxlength="120" /></label>
-      <label>Destination URL <span class="muted">— change it any time, the printed QR stays the same</span>
-        <input name="targetUrl" value="${esc(d.targetUrl)}" required /></label>
+      ${d.type === 'vcard'
+        ? `<p class="muted small" style="margin:0">Contact card for <b>${esc(VCard.fullName(d.vcard))}</b>. Edit the details any time; the printed QR stays the same.
+             <a href="${esc(d.shortUrl)}" target="_blank" rel="noopener">View card page</a></p>`
+        : `<label>Destination URL <span class="muted">— change it any time, the printed QR stays the same</span>
+        <input name="targetUrl" value="${esc(d.targetUrl)}" required /></label>`}
       <p class="error" id="edit-error"></p>
       <div class="row"><button class="btn primary" type="submit">Save changes</button>
+        ${d.type === 'vcard' ? '<button class="btn" type="button" data-act="editvc">Edit vCard details</button>' : ''}
         <button class="btn danger" type="button" data-act="delete">Delete</button></div>
     </form>
 
@@ -463,8 +455,8 @@ async function openDrawer(id) {
       ${s.recent.map((r) => `<tr><td>${esc(r.scanned_at)}</td><td>${esc(r.device)}</td><td>${esc(r.os)}</td><td>${esc(r.browser)}</td></tr>`).join('')}</table>
       <p><a href="/api/dynamic/${d.id}/scans.csv">Export all scans (CSV)</a></p>` : '<p class="muted small">No scans yet. Scan the code with your phone to test it.</p>'}
 
-    <h3>Destination history</h3>
-    <table>${d.history.map((h) => `<tr><td class="muted" style="white-space:nowrap">${esc(h.changed_at)}</td><td style="word-break:break-all">${esc(h.target_url)}</td></tr>`).join('')}</table>`;
+    ${d.type === 'vcard' ? '' : `<h3>Destination history</h3>
+    <table>${d.history.map((h) => `<tr><td class="muted" style="white-space:nowrap">${esc(h.changed_at)}</td><td style="word-break:break-all">${esc(h.target_url)}</td></tr>`).join('')}</table>`}`;
 
   $('#drawer').hidden = $('#drawer-backdrop').hidden = false;
   $('[data-close]', $('#drawer')).addEventListener('click', closeDrawer);
@@ -472,14 +464,265 @@ async function openDrawer(id) {
   $('#edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = readForm(e.target);
-    let url = f.targetUrl.trim();
-    if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+    const body = { name: f.name };
+    if (d.type !== 'vcard') {
+      body.targetUrl = f.targetUrl.trim();
+      if (body.targetUrl && !/^https?:\/\//i.test(body.targetUrl)) body.targetUrl = 'https://' + body.targetUrl;
+    }
     try {
-      await api(`/dynamic/${d.id}`, { method: 'PATCH', body: { name: f.name, targetUrl: url } });
+      await api(`/dynamic/${d.id}`, { method: 'PATCH', body });
       toast('Saved'); await loadDynamic(); openDrawer(d.id);
     } catch (err) { $('#edit-error').textContent = err.message; }
   });
 }
 
+// ---------- vCARD ----------
+const COUNTRIES = [
+  ['IN', '+91', '🇮🇳'], ['US', '+1', '🇺🇸'], ['GB', '+44', '🇬🇧'], ['AE', '+971', '🇦🇪'], ['SA', '+966', '🇸🇦'],
+  ['QA', '+974', '🇶🇦'], ['KW', '+965', '🇰🇼'], ['OM', '+968', '🇴🇲'], ['BH', '+973', '🇧🇭'], ['SG', '+65', '🇸🇬'],
+  ['MY', '+60', '🇲🇾'], ['AU', '+61', '🇦🇺'], ['CA', '+1', '🇨🇦'], ['DE', '+49', '🇩🇪'], ['FR', '+33', '🇫🇷'],
+  ['LK', '+94', '🇱🇰'], ['NP', '+977', '🇳🇵'], ['BD', '+880', '🇧🇩'], ['ZA', '+27', '🇿🇦'], ['NZ', '+64', '🇳🇿'],
+];
+const vcForm = $('#vc-form');
+const vcDesign = designControls($('#vc-design'), { onChange: () => updateVcard() });
+let vcEditId = null, vcShortUrl = '', vcPhoto = '', vcSubmitted = false, vcPreview = 'card', vcQrUrl;
+
+const plusBtn = (kind, first) => first
+  ? `<button type="button" class="icon-btn" data-add="${kind}" title="Add another" aria-label="Add another">+</button>`
+  : `<button type="button" class="icon-btn minus" data-del title="Remove" aria-label="Remove">−</button>`;
+
+function phoneRow(first, p = {}) {
+  // split a stored "+91 98470 12345" back into country code + local number
+  let cc = 'IN', num = p.number || '';
+  const m = COUNTRIES.filter(([, code]) => num.startsWith(code + ' ') || num.startsWith(code))
+    .sort((a, b) => b[1].length - a[1].length)[0];
+  if (m) { cc = m[0]; num = num.slice(m[1].length).trim(); } else if (num.startsWith('+')) cc = '';
+  return `<div class="phone-row" data-row="phone">
+    <div class="fl"><select data-f="type">${Object.entries(VCard.PHONE_TYPES).map(([k, v]) =>
+      `<option value="${k}" ${k === (p.type || 'main') ? 'selected' : ''}>${v.label}</option>`).join('')}</select><span>Phone Type</span></div>
+    <div class="fl num">
+      <select class="cc" data-f="cc" aria-label="Country code">${COUNTRIES.map(([iso, code, flag]) =>
+        `<option value="${iso}" ${iso === cc ? 'selected' : ''}>${flag} ${code}</option>`).join('')}
+        <option value="" ${cc === '' ? 'selected' : ''}>🌐 other</option></select>
+      <input type="tel" data-f="number" placeholder="Phone number" value="${esc(num)}" maxlength="25" />
+      ${plusBtn('phone', first)}
+    </div></div>`;
+}
+const textRow = (kind, label, help, first, value = '') => `<div class="fl" data-row="${kind}">
+  <input type="${kind === 'email' ? 'email' : 'url'}" data-f="v" placeholder=" " value="${esc(value)}" maxlength="${kind === 'email' ? 254 : 300}" />
+  <span>${label}</span>${first ? `<i class="help" title="${help}">?</i>` : ''}${plusBtn(kind, first)}</div>`;
+
+const ROWS = {
+  phone: { el: '#vc-phones', make: (first, v) => phoneRow(first, v) },
+  email: { el: '#vc-emails', make: (first, v) => textRow('email', 'Email', 'Up to 5 email addresses.', first, v) },
+  website: { el: '#vc-websites', make: (first, v) => textRow('website', 'Website', 'Up to 5 links: website, LinkedIn, portfolio…', first, v) },
+};
+function setRows(kind, values) {
+  const r = ROWS[kind], list = values && values.length ? values : [undefined];
+  $(r.el).innerHTML = list.map((v, i) => r.make(i === 0, v)).join('');
+  syncAddButtons();
+}
+function syncAddButtons() {
+  for (const kind of Object.keys(ROWS)) {
+    const add = $(`[data-add="${kind}"]`, vcForm);
+    if (add) add.disabled = $$(`[data-row="${kind}"]`, vcForm).length >= VCard.MAX_ITEMS;
+  }
+}
+vcForm.addEventListener('click', (e) => {
+  const add = e.target.closest('[data-add]'), del = e.target.closest('[data-del]');
+  if (add) {
+    const kind = add.dataset.add, r = ROWS[kind];
+    $(r.el).insertAdjacentHTML('beforeend', r.make(false));
+    $(r.el).lastElementChild.querySelector('input').focus();
+  } else if (del) {
+    del.closest('[data-row]').remove();
+  } else return;
+  syncAddButtons(); updateVcard();
+});
+
+function readVcard() {
+  const f = vcForm.elements;
+  return {
+    firstName: f.firstName.value, lastName: f.lastName.value, company: f.company.value, jobTitle: f.jobTitle.value,
+    birthday: f.birthday.value, address: f.address.value, color: f.color.value, photo: vcPhoto,
+    phones: $$('[data-row="phone"]', vcForm).map((r) => {
+      const number = $('[data-f="number"]', r).value.trim();
+      const code = (COUNTRIES.find(([iso]) => iso === $('[data-f="cc"]', r).value) || [])[1];
+      return { type: $('[data-f="type"]', r).value, number: number && code && !number.startsWith('+') ? `${code} ${number}` : number };
+    }),
+    emails: $$('[data-row="email"] input', vcForm).map((i) => i.value),
+    websites: $$('[data-row="website"] input', vcForm).map((i) => i.value),
+  };
+}
+
+// ----- photo: resize in the browser so the stored card stays small -----
+async function resizePhoto(file) {
+  const img = await loadImg(URL.createObjectURL(file));
+  for (const [max, q] of [[480, 0.86], [360, 0.8], [256, 0.72]]) {
+    const scale = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    const url = c.toDataURL('image/jpeg', q);
+    if (url.length < 280 * 1024) return url;
+  }
+  throw new Error('That image is too large. Try a smaller one.');
+}
+function setPhoto(url) {
+  vcPhoto = url || '';
+  $('#vc-photo-empty').hidden = !!vcPhoto;
+  $('#vc-photo-set').hidden = !vcPhoto;
+  if (vcPhoto) $('#vc-photo-img').src = vcPhoto;
+  updateVcard();
+}
+$('#vc-photo-btn').addEventListener('click', () => $('#vc-photo-input').click());
+$('#vc-photo-change').addEventListener('click', () => $('#vc-photo-input').click());
+$('#vc-photo-remove').addEventListener('click', () => setPhoto(''));
+$('#vc-photo-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  try { setPhoto(await resizePhoto(file)); } catch (err) { toast(err.message); }
+});
+
+$('#vc-color').addEventListener('input', (e) => { $('#vc-color-hex').textContent = e.target.value.toUpperCase(); });
+$('#vc-dob').max = new Date().toISOString().slice(0, 10);
+vcForm.addEventListener('input', () => updateVcard());
+vcForm.addEventListener('change', () => updateVcard());
+vcForm.addEventListener('submit', (e) => e.preventDefault());
+$('#vc-static').addEventListener('change', () => { if ($('#vc-static').checked) setVcPreview('qr'); updateVcard(); });
+$$('#vc-preview-tabs button').forEach((b) => b.addEventListener('click', () => setVcPreview(b.dataset.p)));
+function setVcPreview(p) {
+  vcPreview = p;
+  $$('#vc-preview-tabs button').forEach((b) => b.classList.toggle('active', b.dataset.p === p));
+  $('#vc-card-wrap').hidden = p !== 'card';
+  $('#vc-qr-wrap').hidden = p !== 'qr';
+}
+
+function vcActions(html) {
+  $('#vc-actions').innerHTML = html;
+  $$('#vc-actions [data-vc]').forEach((b) => b.addEventListener('click', () => vcAction(b.dataset.vc)));
+}
+
+let vcState = { card: null, errors: [], text: '' };
+const updateVcard = debounce(async () => {
+  const isStatic = $('#vc-static').checked && !vcEditId;
+  const { card, errors } = VCard.normalize(readVcard());
+  const text = VCard.build(card, { photo: false });
+  vcState = { card, errors, text };
+
+  // highlight invalid rows; only nag about the name after the first save attempt
+  const shown = errors.filter((e) => vcSubmitted || !/^Enter a first name/.test(e));
+  $('#vc-error').textContent = shown.join('. ');
+  $$('.fl', vcForm).forEach((el) => el.classList.remove('invalid'));
+  errors.forEach((e) => {
+    const bad = e.split(': ')[1];
+    if (bad) $$('[data-row] input', vcForm).filter((i) => i.value && bad.startsWith(i.value.trim().slice(0, 60)))
+      .forEach((i) => i.closest('.fl').classList.add('invalid'));
+  });
+
+  $('#vc-card').srcdoc = VCard.renderPage(card, '#');
+  $('#vc-name-wrap span').textContent = isStatic ? 'File name (optional)' : 'Name your QR (optional)';
+  $('#vc-static').disabled = !!vcEditId;
+
+  const img = $('#vc-qr'), empty = $('#vc-qr-empty'), note = $('#vc-qr-note');
+  const style = vcDesign.get();
+  const qrData = isStatic ? text : vcShortUrl;
+  if (isStatic) {
+    note.textContent = `${text.length} characters stored in the code. The photo isn't included in static codes.` +
+      (text.length > 600 ? ' Long contacts make a dense code: print it at least 3 cm wide.' : '');
+  } else {
+    note.innerHTML = vcShortUrl ? `Points to <a href="${esc(vcShortUrl)}" target="_blank" rel="noopener">${esc(vcShortUrl)}</a>. Edits update the card without changing the code.` : '';
+  }
+  empty.textContent = qrData ? '' : 'Create the vCard QR to get its code.';
+  if (!qrData || (isStatic && errors.length)) img.removeAttribute('src');
+  else {
+    try {
+      const blob = await renderPng(qrData, { ...style, size: 512 });
+      if (vcQrUrl) URL.revokeObjectURL(vcQrUrl);
+      img.src = vcQrUrl = URL.createObjectURL(blob);
+    } catch (err) { note.textContent = err.message; img.removeAttribute('src'); }
+  }
+
+  if (isStatic) {
+    vcActions(`<button type="button" class="btn primary" data-vc="png">Download PNG</button>
+      <button type="button" class="btn" data-vc="svg">SVG</button><button type="button" class="btn" data-vc="vcf">.vcf file</button>`);
+  } else if (vcEditId) {
+    vcActions(`<button type="button" class="btn primary" data-vc="save">Save changes</button>
+      <button type="button" class="btn" data-vc="png">PNG</button><button type="button" class="btn" data-vc="svg">SVG</button>
+      <button type="button" class="btn" data-vc="new">New vCard</button>`);
+  } else {
+    vcActions(`<button type="button" class="btn primary" data-vc="create">Create vCard QR</button>`);
+  }
+}, 200);
+
+function vcFileName() { return slugify(vcForm.elements.qrName.value || VCard.fullName(vcState.card || {})); }
+
+async function vcAction(act) {
+  const { card, errors, text } = vcState;
+  try {
+    if (act === 'new') return resetVcard();
+    if (['create', 'save'].includes(act) || $('#vc-static').checked) {
+      if (errors.length) { vcSubmitted = true; updateVcard(); $('#vc-error').scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
+    }
+    const style = vcDesign.get();
+    const qrData = $('#vc-static').checked && !vcEditId ? text : vcShortUrl;
+    if (act === 'png') return download(URL.createObjectURL(await renderPng(qrData, { ...style, size: 1024 })), `${vcFileName()}.png`);
+    if (act === 'svg') return download(URL.createObjectURL(await renderSvg(qrData, style)), `${vcFileName()}.svg`);
+    if (act === 'vcf') return download(URL.createObjectURL(new Blob([VCard.build(card)], { type: 'text/vcard' })), `${vcFileName()}.vcf`);
+    const { dark, light, ecc, margin } = style;
+    const body = { type: 'vcard', name: vcForm.elements.qrName.value.trim(), vcard: readVcard(), style: { dark, light, ecc, margin } };
+    if (act === 'create') {
+      const c = await api('/dynamic', { method: 'POST', body });
+      vcEditId = c.id; vcShortUrl = c.shortUrl;
+      if (!body.name) vcForm.elements.qrName.value = c.name;
+      $('#vc-title').textContent = `Editing: ${c.name}`;
+      toast('vCard QR created');
+      setVcPreview('qr');
+    } else if (act === 'save') {
+      if (!body.name) delete body.name;
+      const c = await api(`/dynamic/${vcEditId}`, { method: 'PATCH', body });
+      $('#vc-title').textContent = `Editing: ${c.name}`;
+      toast('Saved. The printed QR now shows the new details');
+    }
+    updateVcard();
+  } catch (err) { $('#vc-error').textContent = err.message; }
+}
+
+function fillVcard(card = {}, { name = '', style } = {}) {
+  vcForm.reset();
+  for (const k of ['firstName', 'lastName', 'company', 'jobTitle', 'birthday', 'address']) vcForm.elements[k].value = card[k] || '';
+  vcForm.elements.color.value = card.color || '#4f46e5';
+  $('#vc-color-hex').textContent = vcForm.elements.color.value.toUpperCase();
+  vcForm.elements.qrName.value = name;
+  setRows('phone', card.phones); setRows('email', card.emails); setRows('website', card.websites);
+  if (style) vcDesign.set(style);
+  vcSubmitted = false;
+  setPhoto(card.photo || '');
+}
+function resetVcard() {
+  vcEditId = null; vcShortUrl = '';
+  $('#vc-title').textContent = 'vCard QR code';
+  fillVcard();
+  setVcPreview('card');
+}
+async function editVcard(id) {
+  try {
+    const d = await api(`/dynamic/${id}`);
+    vcEditId = d.id; vcShortUrl = d.shortUrl;
+    $('#vc-static').checked = false;
+    $('#vc-title').textContent = `Editing: ${d.name}`;
+    fillVcard(d.vcard, { name: d.name, style: d.style });
+    $('.tab[data-view="vcard"]').click();
+    scrollTo({ top: 0 });
+  } catch (err) { toast(err.message); }
+}
+resetVcard();
+
+document.addEventListener('click', (e) => {
+  const g = e.target.closest('[data-goto]'); if (!g) return;
+  e.preventDefault(); $(`.tab[data-view="${g.dataset.goto}"]`).click();
+});
 // deep link to tab
-if (location.hash === '#dynamic') $('.tab[data-view="dynamic"]').click();
+{ const t = $(`.tab[data-view="${location.hash.slice(1)}"]`); if (t) t.click(); }
