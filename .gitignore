@@ -1,0 +1,4 @@
+node_modules/
+data/
+deploy/install-qr-platform.sh
+.env

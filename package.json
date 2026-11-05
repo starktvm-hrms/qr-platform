@@ -1,0 +1,19 @@
+{
+  "name": "qr-platform",
+  "version": "1.0.0",
+  "description": "Static & dynamic QR code platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.22.3",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

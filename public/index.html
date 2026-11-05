@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QR Platform</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm8-2h2v2h-2v-2zm2 2h2v2h-2v-2zm2-2h2v2h-2v-2zm2 2h2v2h-2v-2zm-6 2h2v2h-2v-2zm2 2h2v2h-2v-2zm2-2h2v2h-2v-2zm2 2h2v2h-2v-2z"/></svg>
+      <span>QR Platform</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-view="static" role="tab">Static QR</button>
+      <button class="tab" data-view="dynamic" role="tab">Dynamic QR</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ================= STATIC ================= -->
+    <section id="view-static" class="view active">
+      <div class="intro">
+        <h1>Static QR codes</h1>
+        <p>Content is encoded directly into the image. Works forever, offline, with no tracking &mdash; but can't be changed after printing.</p>
+      </div>
+
+      <div class="layout">
+        <div class="panel">
+          <h2>1. Content</h2>
+          <div class="chips" id="static-types">
+            <button class="chip active" data-type="url">URL</button>
+            <button class="chip" data-type="text">Text</button>
+            <button class="chip" data-type="wifi">Wi-Fi</button>
+            <button class="chip" data-type="vcard">Contact</button>
+            <button class="chip" data-type="email">Email</button>
+            <button class="chip" data-type="sms">SMS</button>
+            <button class="chip" data-type="phone">Phone</button>
+            <button class="chip" data-type="geo">Location</button>
+          </div>
+          <form id="static-form" class="fields" autocomplete="off"></form>
+
+          <h2>2. Design</h2>
+          <div id="static-design"></div>
+        </div>
+
+        <div class="panel preview-panel">
+          <h2>Preview</h2>
+          <div class="preview"><img id="static-preview" alt="QR preview" /><p class="muted" id="static-empty">Fill in the content to see your QR code</p></div>
+          <p class="payload" id="static-payload"></p>
+          <div class="row">
+            <button class="btn primary" id="static-png">Download PNG</button>
+            <button class="btn" id="static-svg">Download SVG</button>
+          </div>
+          <p class="muted small" id="static-warn"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= DYNAMIC ================= -->
+    <section id="view-dynamic" class="view">
+      <div class="intro">
+        <h1>Dynamic QR codes</h1>
+        <p>The QR points to a short link on this server that redirects to your destination. Change the destination any time, pause it, and track scans.</p>
+      </div>
+
+      <div class="stats" id="overview"></div>
+
+      <div class="layout">
+        <div class="panel">
+          <h2>Create a dynamic QR</h2>
+          <form id="dyn-form" class="fields">
+            <label>Name<input name="name" required maxlength="120" placeholder="Spring flyer" /></label>
+            <label>Destination URL<input name="targetUrl" required placeholder="https://example.com/landing" /></label>
+            <label>Custom slug <span class="muted">(optional)</span><input name="code" placeholder="spring-sale" pattern="[A-Za-z0-9_\-]{3,32}" /></label>
+            <div id="dyn-design"></div>
+            <p class="error" id="dyn-error"></p>
+            <button class="btn primary" type="submit">Create dynamic QR</button>
+          </form>
+        </div>
+
+        <div class="panel grow">
+          <div class="list-head">
+            <h2>Your codes</h2>
+            <input type="search" id="dyn-search" placeholder="Search…" />
+          </div>
+          <div id="dyn-list" class="cards"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- detail drawer -->
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog">
+    <div id="drawer-body"></div>
+  </aside>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
