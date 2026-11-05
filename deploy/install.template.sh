@@ -81,7 +81,11 @@ chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
 chmod 750 "$DATA_DIR"
 
 # ---------------------------------------------------------------- config
-port_free() { ! ss -ltnH "sport = :$1" | grep -q .; }
+command -v ss >/dev/null || { apt_update; apt-get install -y -qq iproute2 >/dev/null; }
+command -v ss >/dev/null || die "The ss tool (iproute2) is required to detect ports in use"
+port_free() { [ -z "$(ss -ltnH "sport = :$1")" ]; }
+# Random strings from Node (no pipes, so pipefail can't trip on SIGPIPE).
+rand_str() { "$NODE_BIN" -e "process.stdout.write(require('crypto').randomBytes($1).toString('$2'))"; }
 if [ -f "$ENV_FILE" ]; then
   log "Keeping existing config $ENV_FILE"
   # shellcheck disable=SC1090
@@ -90,7 +94,8 @@ if [ -f "$ENV_FILE" ]; then
 else
   PORT=3100
   while ! port_free "$PORT"; do PORT=$((PORT + 1)); done
-  NEW_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)
+  NEW_PASSWORD=$(rand_str 15 base64url)
+  NEW_SALT=$(rand_str 16 hex)
   umask 077
   cat > "$ENV_FILE" <<EOF
 PORT=$PORT
@@ -98,7 +103,7 @@ HOST=127.0.0.1
 BASE_URL=https://$DOMAIN
 DATA_DIR=$DATA_DIR
 ADMIN_PASSWORD=$NEW_PASSWORD
-IP_SALT=$(tr -dc 'a-f0-9' </dev/urandom | head -c 32)
+IP_SALT=$NEW_SALT
 NODE_ENV=production
 EOF
   umask 022
@@ -136,15 +141,15 @@ systemctl daemon-reload
 systemctl enable --quiet $SERVICE
 systemctl restart $SERVICE
 for i in $(seq 1 20); do
-  curl -fsS -o /dev/null -u "admin:$ADMIN_PASSWORD" "http://127.0.0.1:$PORT/" && break
+  curl -fs -o /dev/null -u "admin:$ADMIN_PASSWORD" "http://127.0.0.1:$PORT/" && break
   sleep 0.5
   [ "$i" -eq 20 ] && { journalctl -u $SERVICE -n 30 --no-pager; die "App did not start"; }
 done
 echo "App is running."
 
 # ---------------------------------------------------------------- web server
-SERVER_IP=$(curl -fsS -4 --max-time 5 https://api.ipify.org || hostname -I | awk '{print $1}')
-dns_ok() { getent ahostsv4 "$DOMAIN" | awk '{print $1}' | grep -qx "$SERVER_IP"; }
+SERVER_IP=$(curl -fs -4 --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
+dns_ok() { getent ahostsv4 "$DOMAIN" | awk '{print $1}' | grep -x "$SERVER_IP" >/dev/null; }
 WEB=$(ss -ltnpH 'sport = :80' | grep -oE 'users:\(\("[^"]+' | head -1 | sed 's/.*("//' || true)
 echo "Web server on port 80: ${WEB:-none}"
 CERT_NOTE=""
@@ -168,11 +173,13 @@ case "$WEB" in
     else
       CONF=/etc/nginx/conf.d/$DOMAIN.conf; LINK=""
     fi
+    # Listen on IPv6 only if the existing nginx setup already does.
+    V6=""; nginx -T 2>/dev/null | grep -E '^[[:space:]]*listen[[:space:]]+\[::\]' >/dev/null && V6="listen [::]:80;"
     if [ ! -f "$CONF" ]; then
       cat > "$CONF" <<EOF
 server {
     listen 80;
-    listen [::]:80;
+    $V6
     server_name $DOMAIN;
     client_max_body_size 1m;
     location / {
@@ -238,6 +245,7 @@ EOF
     log "No web server found; installing Caddy (automatic HTTPS)"
     apt_update; apt-get install -y -qq caddy >/dev/null
     CF=/etc/caddy/Caddyfile
+    mkdir -p /etc/caddy
     if grep -q '/usr/share/caddy' "$CF" 2>/dev/null; then : > "$CF"; fi
     grep -q "^$DOMAIN {" "$CF" 2>/dev/null || printf '%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n' "$DOMAIN" "$PORT" >> "$CF"
     caddy validate --config "$CF" --adapter caddyfile >/dev/null
@@ -250,7 +258,7 @@ EOF
     ;;
 esac
 
-if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+if command -v ufw >/dev/null && ufw status | grep "Status: active" >/dev/null; then
   ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
 fi
 
