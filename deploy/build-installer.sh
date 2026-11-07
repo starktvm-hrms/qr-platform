@@ -6,7 +6,8 @@ cd "$(dirname "$0")/.."
 DOMAIN="${1:-qr.starkpeople.in}"
 OUT=deploy/install-qr-platform.sh
 
-B64=$(tar --owner=0 --group=0 -czf - package.json package-lock.json server.js db.js public | base64 -w 76)
+# every top-level .js file (server, db, geo, ...) plus the dashboard
+B64=$(tar --owner=0 --group=0 -czf - package.json package-lock.json ./*.js public | base64 -w 76)
 python3 - "$DOMAIN" "$OUT" <<PY
 import sys
 domain, out = sys.argv[1], sys.argv[2]
