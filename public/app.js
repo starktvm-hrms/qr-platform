@@ -183,13 +183,15 @@ async function renderSvg(data, style) {
   return new Blob([svg], { type: 'image/svg+xml' });
 }
 
-// EPS is rendered by the server as pure vector. A center logo (raster) isn't included.
-async function renderEps(data, style) {
-  const res = await fetch(qrUrl(data, style, 'eps', style.size || 1024));
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not render EPS');
-  if (style.logo) toast('Note: the center logo is not included in EPS files');
+// EPS and PDF are rendered by the server as pure vector. A center logo (raster) isn't included.
+async function renderVector(fmt, data, style) {
+  const res = await fetch(qrUrl(data, style, fmt, style.size || 1024));
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Could not render ${fmt.toUpperCase()}`);
+  if (style.logo) toast(`Note: the center logo is not included in ${fmt.toUpperCase()} files`);
   return res.blob();
 }
+const renderEps = (data, style) => renderVector('eps', data, style);
+const renderPdf = (data, style) => renderVector('pdf', data, style);
 
 // ---------- STATIC generator ----------
 const STATIC_TYPES = {
@@ -277,7 +279,7 @@ const updateStatic = debounce(async () => {
   const style = staticDesign.get();
   $('#static-payload').textContent = staticPayload;
   $('#static-warn').textContent = staticPayload ? contrastWarning(style) : '';
-  $('#static-png').disabled = $('#static-svg').disabled = $('#static-eps').disabled = !staticPayload;
+  $('#static-png').disabled = $('#static-svg').disabled = $('#static-eps').disabled = $('#static-pdf').disabled = !staticPayload;
   const img = $('#static-preview');
   $('#static-empty').hidden = !!staticPayload;
   if (!staticPayload) { img.removeAttribute('src'); return; }
@@ -291,6 +293,10 @@ const updateStatic = debounce(async () => {
 $('#static-png').addEventListener('click', async () => {
   const blob = await renderPng(staticPayload, staticDesign.get());
   download(URL.createObjectURL(blob), `qr-${staticType}.png`);
+});
+$('#static-pdf').addEventListener('click', async () => {
+  const blob = await renderPdf(staticPayload, staticDesign.get());
+  download(URL.createObjectURL(blob), `qr-${staticType}.pdf`);
 });
 $('#static-eps').addEventListener('click', async () => {
   const blob = await renderEps(staticPayload, staticDesign.get());
@@ -346,6 +352,7 @@ function renderList() {
         <button class="btn sm" data-act="png">PNG</button>
         <button class="btn sm" data-act="svg">SVG</button>
         <button class="btn sm" data-act="eps">EPS</button>
+        <button class="btn sm" data-act="pdf">PDF</button>
         <button class="btn sm" data-act="toggle">${c.active ? 'Pause' : 'Resume'}</button>
         <button class="btn sm danger" data-act="delete">Delete</button>
       </div>
@@ -367,6 +374,7 @@ async function codeAction(act, c) {
     if (act === 'png') return download(URL.createObjectURL(await renderPng(c.shortUrl, { ...styleOf(c), size: 1024 })), `${slugify(c.name)}.png`);
     if (act === 'svg') return download(URL.createObjectURL(await renderSvg(c.shortUrl, styleOf(c))), `${slugify(c.name)}.svg`);
     if (act === 'eps') return download(URL.createObjectURL(await renderEps(c.shortUrl, { ...styleOf(c), size: 1024 })), `${slugify(c.name)}.eps`);
+    if (act === 'pdf') return download(URL.createObjectURL(await renderPdf(c.shortUrl, { ...styleOf(c), size: 1024 })), `${slugify(c.name)}.pdf`);
     if (act === 'toggle') { await api(`/dynamic/${c.id}`, { method: 'PATCH', body: { active: !c.active } }); toast(c.active ? 'Paused' : 'Resumed'); }
     if (act === 'delete') {
       if (!confirm(`Delete "${c.name}"? Printed copies of this QR will stop working.`)) return;
@@ -412,10 +420,11 @@ function barChart(series) {
     <text x="0" y="12">${max}</text>${bars}${label(0, 'start')}${label(Math.floor(series.length / 2))}${label(series.length - 1, 'end')}</svg>`;
 }
 
+const flag = (cc) => /^[A-Z]{2}$/.test(cc || '') ? String.fromCodePoint(...[...cc].map((c) => 127397 + c.charCodeAt(0))) + ' ' : '';
 function breakdown(title, rows) {
   const total = rows.reduce((s, r) => s + r.count, 0) || 1;
   return `<div><h3>${title}</h3>${rows.length ? rows.map((r) => `
-    <div class="bd-item"><span>${esc(r.label)}</span><span class="muted">${Math.round((r.count / total) * 100)}%</span>
+    <div class="bd-item"><span>${flag(r.code)}${esc(r.label)}</span><span class="muted">${Math.round((r.count / total) * 100)}%</span>
     <span class="track"><i style="width:${(r.count / total) * 100}%"></i></span></div>`).join('') : '<p class="muted small">No data yet</p>'}</div>`;
 }
 
@@ -438,6 +447,7 @@ async function openDrawer(id) {
           <button class="btn sm" data-act="png">PNG</button>
           <button class="btn sm" data-act="svg">SVG</button>
           <button class="btn sm" data-act="eps">EPS</button>
+          <button class="btn sm" data-act="pdf">PDF</button>
           <button class="btn sm" data-act="toggle">${d.active ? 'Pause' : 'Resume'}</button>
         </div>
       </div>
@@ -465,9 +475,15 @@ async function openDrawer(id) {
     ${barChart(s.series)}
     <div class="breakdowns">${breakdown('Device', s.devices)}${breakdown('OS', s.os)}${breakdown('Browser', s.browsers)}</div>
 
+    <h3 class="sec">Location</h3>
+    ${d.geo.enabled ? '' : `<p class="muted small geo-note">${d.geo.error ? esc(d.geo.error) + '. ' : 'Location lookup is getting ready (the location database is downloading). '}Scans are still counted; their location shows as Unknown.</p>`}
+    <div class="breakdowns">${breakdown('Country', s.countries)}${breakdown('Region / State', s.regions)}${breakdown('City', s.cities)}</div>
+    <p class="muted small" style="margin-top:4px">Approximate location from the scanner's IP address (city-level, not GPS). IP addresses are not stored.
+      <a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a></p>
+
     <h3>Recent scans</h3>
-    ${s.recent.length ? `<table><tr><th>Time (UTC)</th><th>Device</th><th>OS</th><th>Browser</th></tr>
-      ${s.recent.map((r) => `<tr><td>${esc(r.scanned_at)}</td><td>${esc(r.device)}</td><td>${esc(r.os)}</td><td>${esc(r.browser)}</td></tr>`).join('')}</table>
+    ${s.recent.length ? `<table><tr><th>Time (UTC)</th><th>Location</th><th>Device</th><th>OS</th></tr>
+      ${s.recent.map((r) => `<tr><td>${esc(r.scanned_at)}</td><td>${flag(r.country)}${esc(r.location)}</td><td>${esc(r.device)}</td><td>${esc(r.os)}</td></tr>`).join('')}</table>
       <p><a href="/api/dynamic/${d.id}/scans.csv">Export all scans (CSV)</a></p>` : '<p class="muted small">No scans yet. Scan the code with your phone to test it.</p>'}
 
     ${d.type === 'vcard' ? '' : `<h3>Destination history</h3>
@@ -662,12 +678,12 @@ const updateVcard = debounce(async () => {
 
   if (isStatic) {
     vcActions(`<button type="button" class="btn primary" data-vc="png">Download PNG</button>
-      <button type="button" class="btn" data-vc="svg">SVG</button><button type="button" class="btn" data-vc="eps">EPS</button>
+      <button type="button" class="btn" data-vc="svg">SVG</button><button type="button" class="btn" data-vc="eps">EPS</button><button type="button" class="btn" data-vc="pdf">PDF</button>
       <button type="button" class="btn" data-vc="vcf">.vcf file</button>`);
   } else if (vcEditId) {
     vcActions(`<button type="button" class="btn primary" data-vc="save">Save changes</button>
       <button type="button" class="btn" data-vc="png">PNG</button><button type="button" class="btn" data-vc="svg">SVG</button>
-      <button type="button" class="btn" data-vc="eps">EPS</button>
+      <button type="button" class="btn" data-vc="eps">EPS</button><button type="button" class="btn" data-vc="pdf">PDF</button>
       <button type="button" class="btn" data-vc="new">New vCard</button>`);
   } else {
     vcActions(`<button type="button" class="btn primary" data-vc="create">Create vCard QR</button>`);
@@ -688,6 +704,7 @@ async function vcAction(act) {
     if (act === 'png') return download(URL.createObjectURL(await renderPng(qrData, { ...style, size: 1024 })), `${vcFileName()}.png`);
     if (act === 'svg') return download(URL.createObjectURL(await renderSvg(qrData, style)), `${vcFileName()}.svg`);
     if (act === 'eps') return download(URL.createObjectURL(await renderEps(qrData, { ...style, size: 1024 })), `${vcFileName()}.eps`);
+    if (act === 'pdf') return download(URL.createObjectURL(await renderPdf(qrData, { ...style, size: 1024 })), `${vcFileName()}.pdf`);
     if (act === 'vcf') return download(URL.createObjectURL(new Blob([VCard.build(card)], { type: 'text/vcard' })), `${vcFileName()}.vcf`);
     const { dark, light, ecc, margin } = style;
     const body = { type: 'vcard', name: vcForm.elements.qrName.value.trim(), vcard: readVcard(), style: { dark, light, ecc, margin } };

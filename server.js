@@ -2,8 +2,10 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const QRCode = require('qrcode');
+const zlib = require('zlib');
 const db = require('./db');
 const VCard = require('./public/vcard');
+const geo = require('./geo');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -124,8 +126,8 @@ function requireAdmin(req, res, next) {
 // ---------- public redirect (the "dynamic" part) ----------
 
 const findByCode = db.prepare('SELECT * FROM dynamic_codes WHERE code = ?');
-const insertScan = db.prepare(`INSERT INTO scans (code_id, visitor, device, os, browser, referrer, language)
-                               VALUES (?, ?, ?, ?, ?, ?, ?)`);
+const insertScan = db.prepare(`INSERT INTO scans (code_id, visitor, device, os, browser, referrer, language, country, region, city)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
 function liveCode(req, res) {
   const row = findByCode.get(req.params.code);
@@ -152,10 +154,12 @@ app.get('/r/:code', (req, res) => {
   const ua = req.get('user-agent') || '';
   const { device, os, browser } = parseUA(ua);
   const visitor = crypto.createHash('sha256').update(IP_SALT + (req.ip || '') + ua).digest('hex').slice(0, 16);
+  const loc = geo.lookup(req.ip) || {};
   try {
     insertScan.run(row.id, visitor, device, os, browser,
       (req.get('referer') || '').slice(0, 300) || null,
-      (req.get('accept-language') || '').split(',')[0].slice(0, 20) || null);
+      (req.get('accept-language') || '').split(',')[0].slice(0, 20) || null,
+      loc.country || null, loc.region || null, loc.city || null);
   } catch (e) { console.error('scan log failed', e); }
 
   res.set('Cache-Control', 'no-store');
@@ -187,6 +191,8 @@ app.get('/api/qr', requireAdmin, async (req, res) => {
       res.type('image/svg+xml').send(svg);
     } else if (req.query.format === 'eps') {
       res.type('application/postscript').send(toEps(data, opts));
+    } else if (req.query.format === 'pdf') {
+      res.type('application/pdf').send(toPdf(data, opts));
     } else {
       const buf = await QRCode.toBuffer(data, { ...opts, type: 'png' });
       res.type('image/png').send(buf);
@@ -196,14 +202,38 @@ app.get('/api/qr', requireAdmin, async (req, res) => {
   }
 });
 
-// Vector EPS (for print shops / Illustrator / CorelDRAW). `width` is used as the size in points.
-// Each row's adjacent dark modules are merged into one rectangle to keep the file small.
-function toEps(data, opts) {
+// ---------- vector formats (EPS, PDF) ----------
+// The QR grid as rectangles, with adjacent dark modules in a row merged so files stay small.
+// Coordinates are in modules with a bottom-left origin, which both PostScript and PDF use.
+function qrVector(data, opts) {
   const qr = QRCode.create(data, { errorCorrectionLevel: opts.errorCorrectionLevel });
   const n = qr.modules.size, m = opts.margin, total = n + m * 2;
-  const W = opts.width;
+  const rows = [];
+  for (let r = 0; r < n; r++) {
+    const y = total - 1 - (r + m);
+    const runs = [];
+    let c = 0;
+    while (c < n) {
+      if (!qr.modules.get(r, c)) { c++; continue; }
+      const start = c;
+      while (c < n && qr.modules.get(r, c)) c++;
+      runs.push([start + m, y, c - start]);
+    }
+    if (runs.length) rows.push(runs);
+  }
   const rgb = (hex) => [1, 3, 5].map((i) => (parseInt(hex.slice(i, i + 2), 16) / 255).toFixed(4)).join(' ');
-  const transparentBg = opts.color.light.length === 9 && opts.color.light.slice(7).toLowerCase() === '00';
+  return {
+    total, rows,
+    size: opts.width, // output size in points
+    dark: rgb(opts.color.dark),
+    light: rgb(opts.color.light),
+    transparentBg: opts.color.light.length === 9 && opts.color.light.slice(7).toLowerCase() === '00',
+  };
+}
+
+// EPS for print shops / Illustrator / CorelDRAW.
+function toEps(data, opts) {
+  const v = qrVector(data, opts), W = v.size;
   const out = [
     '%!PS-Adobe-3.0 EPSF-3.0',
     `%%BoundingBox: 0 0 ${W} ${W}`,
@@ -219,23 +249,49 @@ function toEps(data, opts) {
     '%%EndProlog',
     '%%Page: 1 1',
     'gsave',
-    `${(W / total).toFixed(6)} dup scale`,
+    `${(W / v.total).toFixed(6)} dup scale`,
   ];
-  if (!transparentBg) out.push(`${rgb(opts.color.light)} setrgbcolor`, `0 0 ${total} ${total} R`);
-  out.push(`${rgb(opts.color.dark)} setrgbcolor`);
-  for (let r = 0; r < n; r++) {
-    const y = total - 1 - (r + m); // PostScript's origin is bottom-left
-    let c = 0, line = [];
-    while (c < n) {
-      if (!qr.modules.get(r, c)) { c++; continue; }
-      const start = c;
-      while (c < n && qr.modules.get(r, c)) c++;
-      line.push(`${start + m} ${y} ${c - start} 1 R`);
-    }
-    if (line.length) out.push(line.join(' '));
-  }
+  if (!v.transparentBg) out.push(`${v.light} setrgbcolor`, `0 0 ${v.total} ${v.total} R`);
+  out.push(`${v.dark} setrgbcolor`);
+  for (const runs of v.rows) out.push(runs.map(([x, y, w]) => `${x} ${y} ${w} 1 R`).join(' '));
   out.push('grestore', 'showpage', '%%EOF', '');
   return out.join('\n');
+}
+
+// Single-page vector PDF (PDF 1.4), page size = QR size.
+function toPdf(data, opts) {
+  const v = qrVector(data, opts), W = v.size;
+  const ops = ['q', `${(W / v.total).toFixed(6)} 0 0 ${(W / v.total).toFixed(6)} 0 0 cm`];
+  if (!v.transparentBg) ops.push(`${v.light} rg`, `0 0 ${v.total} ${v.total} re f`);
+  ops.push(`${v.dark} rg`);
+  for (const runs of v.rows) ops.push(runs.map(([x, y, w]) => `${x} ${y} ${w} 1 re`).join(' '));
+  ops.push('f', 'Q');
+  const content = zlib.deflateSync(Buffer.from(ops.join('\n')));
+  const d = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${W}] /Resources << >> /Contents 4 0 R >>`,
+    null, // content stream, binary
+    `<< /Title (QR code) /Creator (QR Platform) /Producer (QR Platform) /CreationDate (D:${d}Z) >>`,
+  ];
+  const parts = [Buffer.from('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n', 'latin1')];
+  let offset = parts[0].length;
+  const xref = [];
+  objs.forEach((body, i) => {
+    xref.push(offset);
+    const chunk = body === null
+      ? Buffer.concat([Buffer.from(`${i + 1} 0 obj\n<< /Length ${content.length} /Filter /FlateDecode >>\nstream\n`), content, Buffer.from('\nendstream\nendobj\n')])
+      : Buffer.from(`${i + 1} 0 obj\n${body}\nendobj\n`);
+    parts.push(chunk);
+    offset += chunk.length;
+  });
+  const table = [`xref\n0 ${objs.length + 1}\n`, '0000000000 65535 f \n',
+    ...xref.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`),
+    `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${offset}\n%%EOF\n`].join('');
+  parts.push(Buffer.from(table));
+  return Buffer.concat(parts);
 }
 
 // ---------- dynamic code management API ----------
@@ -304,6 +360,17 @@ api.get('/dynamic/:id', (req, res) => {
   const breakdown = (col) => db.prepare(
     `SELECT ${col} AS label, COUNT(*) AS count FROM scans WHERE code_id = ? GROUP BY ${col} ORDER BY count DESC LIMIT 8`
   ).all(id);
+  // Location breakdowns. Scans without a known location are grouped as "Unknown".
+  const place = (r) => [r.city, r.region, r.country && geo.countryName(r.country)].filter(Boolean).join(', ') || 'Unknown';
+  const countries = db.prepare(`SELECT country, COUNT(*) AS count FROM scans WHERE code_id = ?
+    GROUP BY country ORDER BY count DESC LIMIT 8`).all(id)
+    .map((r) => ({ label: r.country ? geo.countryName(r.country) : 'Unknown', code: r.country, count: r.count }));
+  const regions = db.prepare(`SELECT region, country, COUNT(*) AS count FROM scans WHERE code_id = ?
+    GROUP BY region, country ORDER BY count DESC LIMIT 8`).all(id)
+    .map((r) => ({ label: r.region ? `${r.region}${r.country ? ', ' + r.country : ''}` : 'Unknown', code: r.country, count: r.count }));
+  const cities = db.prepare(`SELECT city, region, country, COUNT(*) AS count FROM scans WHERE code_id = ?
+    GROUP BY city, region, country ORDER BY count DESC LIMIT 8`).all(id)
+    .map((r) => ({ label: r.city ? `${r.city}${r.country ? ', ' + r.country : ''}` : 'Unknown', code: r.country, count: r.count }));
 
   res.json({
     ...serialize(row, req, { full: true }),
@@ -312,8 +379,11 @@ api.get('/dynamic/:id', (req, res) => {
       devices: breakdown('device'),
       os: breakdown('os'),
       browsers: breakdown('browser'),
-      recent: db.prepare('SELECT scanned_at, device, os, browser, language FROM scans WHERE code_id = ? ORDER BY id DESC LIMIT 15').all(id),
+      countries, regions, cities,
+      recent: db.prepare('SELECT scanned_at, device, os, browser, language, country, region, city FROM scans WHERE code_id = ? ORDER BY id DESC LIMIT 15')
+        .all(id).map((r) => ({ ...r, location: place(r) })),
     },
+    geo: { ...geo.state },
     history: db.prepare('SELECT target_url, changed_at FROM url_history WHERE code_id = ? ORDER BY id DESC LIMIT 20').all(id),
   });
 });
@@ -352,10 +422,11 @@ api.delete('/dynamic/:id', (req, res) => {
 api.get('/dynamic/:id/scans.csv', (req, res) => {
   const row = getStmt.get(Number(req.params.id));
   if (!row) return res.status(404).send('Not found');
-  const rows = db.prepare('SELECT scanned_at, device, os, browser, language, referrer FROM scans WHERE code_id = ? ORDER BY id').all(row.id);
+  const rows = db.prepare('SELECT scanned_at, device, os, browser, language, referrer, country, region, city FROM scans WHERE code_id = ? ORDER BY id').all(row.id);
   const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const csv = ['scanned_at_utc,device,os,browser,language,referrer',
-    ...rows.map((r) => [r.scanned_at, r.device, r.os, r.browser, r.language, r.referrer].map(esc).join(','))].join('\n');
+  const csv = ['scanned_at_utc,country_code,country,region,city,device,os,browser,language,referrer',
+    ...rows.map((r) => [r.scanned_at, r.country, r.country && geo.countryName(r.country), r.region, r.city,
+      r.device, r.os, r.browser, r.language, r.referrer].map(esc).join(','))].join('\n');
   res.type('text/csv').attachment(`${row.code}-scans.csv`).send(csv);
 });
 
@@ -372,6 +443,8 @@ app.use('/api', api);
 
 // ---------- dashboard UI ----------
 app.use(requireAdmin, express.static(path.join(__dirname, 'public')));
+
+geo.init().catch((e) => console.error('GeoIP init failed:', e.message));
 
 app.listen(PORT, HOST, () => {
   console.log(`QR Platform running on http://${HOST}:${PORT}`);

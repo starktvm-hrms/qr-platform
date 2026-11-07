@@ -6,7 +6,7 @@ A self-hosted platform for creating **static** and **dynamic** QR codes.
 |---|---|---|
 | What's encoded | The content itself | A short link on this server (`/r/<slug>`) |
 | Edit after printing | No | Yes, change the destination any time |
-| Scan analytics | No | Yes: total/unique scans, daily chart, device/OS/browser, CSV export |
+| Scan analytics | No | Yes: total/unique scans, daily chart, country/region/city, device/OS/browser, CSV export |
 | Needs server | Only to render | Yes, the server must stay online |
 
 ## Features
@@ -17,8 +17,9 @@ A self-hosted platform for creating **static** and **dynamic** QR codes.
   - **Static:** the vCard text is stored in the QR itself. The photo isn't included, and you can also download a `.vcf` file.
 - **Dynamic codes:** custom slugs, editable destination, pause/resume, delete, destination history
 - **Design:** foreground/background colors, transparent background, error correction level, quiet zone, size up to 2048 px, center logo (auto-switches to high error correction), contrast warnings
-- **Export:** PNG, SVG and EPS. EPS is pure vector for print shops, Illustrator and CorelDRAW. The center logo is included in PNG and SVG only.
+- **Export:** PNG, SVG, EPS and PDF. EPS and PDF are pure vector for print shops, Illustrator and CorelDRAW. The center logo is included in PNG and SVG only.
 - **Privacy-friendly analytics:** visitors are counted with a salted hash, and raw IPs are never stored
+- **Scan locations:** country, region/state and city, looked up offline in the [DB-IP City Lite](https://db-ip.com) database (CC BY 4.0). Visitor IPs are never sent to a third party. The database (~130 MB, held in memory) downloads automatically into `DATA_DIR/geo` and refreshes monthly; until it's ready, scans show as "Unknown". Locations are approximate (city-level, from the IP address).
 - **Optional password** protection for the dashboard and API. The redirect links stay public.
 
 ## Run
@@ -41,12 +42,14 @@ Open http://localhost:3000.
 | `ADMIN_PASSWORD` | Enables HTTP Basic auth on the dashboard and API (any username) |
 | `IP_SALT` | Fixed salt for unique-visitor hashing. Set it so unique counts stay consistent across restarts. |
 | `DATA_DIR` | Where the SQLite database lives (default `./data`) |
+| `GEOIP_DB` | Use your own `.mmdb` file(s) for locations instead of the automatic DB-IP download, e.g. MaxMind GeoLite2-City (comma-separated) |
+| `GEOIP_AUTO_UPDATE` | Set to `off` to stop the automatic DB-IP download |
 
 ## API
 
 All under `/api` (Basic auth if `ADMIN_PASSWORD` is set).
 
-- `GET /api/qr?data=…&format=png|svg|eps&size=512&dark=111827&light=ffffff&ecc=M&margin=2`: render any QR
+- `GET /api/qr?data=…&format=png|svg|eps|pdf&size=512&dark=111827&light=ffffff&ecc=M&margin=2`: render any QR
 - `GET /api/dynamic`: list codes with scan counts
 - `POST /api/dynamic` `{ name, targetUrl, code?, style? }`: create a redirect
 - `POST /api/dynamic` `{ type: "vcard", vcard: {…}, name?, code?, style? }`: create a contact card

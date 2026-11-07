@@ -50,4 +50,10 @@ const cols = db.prepare('PRAGMA table_info(dynamic_codes)').all().map((c) => c.n
 if (!cols.includes('type')) db.exec("ALTER TABLE dynamic_codes ADD COLUMN type TEXT NOT NULL DEFAULT 'url'");
 if (!cols.includes('payload')) db.exec('ALTER TABLE dynamic_codes ADD COLUMN payload TEXT');
 
+// scan location (from offline GeoIP; the IP itself is never stored)
+const scanCols = db.prepare('PRAGMA table_info(scans)').all().map((c) => c.name);
+for (const col of ['country', 'region', 'city']) {
+  if (!scanCols.includes(col)) db.exec(`ALTER TABLE scans ADD COLUMN ${col} TEXT`);
+}
+
 module.exports = db;
