@@ -185,6 +185,8 @@ app.get('/api/qr', requireAdmin, async (req, res) => {
     if (req.query.format === 'svg') {
       const svg = await QRCode.toString(data, { ...opts, type: 'svg' });
       res.type('image/svg+xml').send(svg);
+    } else if (req.query.format === 'eps') {
+      res.type('application/postscript').send(toEps(data, opts));
     } else {
       const buf = await QRCode.toBuffer(data, { ...opts, type: 'png' });
       res.type('image/png').send(buf);
@@ -193,6 +195,48 @@ app.get('/api/qr', requireAdmin, async (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+
+// Vector EPS (for print shops / Illustrator / CorelDRAW). `width` is used as the size in points.
+// Each row's adjacent dark modules are merged into one rectangle to keep the file small.
+function toEps(data, opts) {
+  const qr = QRCode.create(data, { errorCorrectionLevel: opts.errorCorrectionLevel });
+  const n = qr.modules.size, m = opts.margin, total = n + m * 2;
+  const W = opts.width;
+  const rgb = (hex) => [1, 3, 5].map((i) => (parseInt(hex.slice(i, i + 2), 16) / 255).toFixed(4)).join(' ');
+  const transparentBg = opts.color.light.length === 9 && opts.color.light.slice(7).toLowerCase() === '00';
+  const out = [
+    '%!PS-Adobe-3.0 EPSF-3.0',
+    `%%BoundingBox: 0 0 ${W} ${W}`,
+    `%%HiResBoundingBox: 0 0 ${W}.000 ${W}.000`,
+    '%%Title: QR code',
+    '%%Creator: QR Platform',
+    `%%CreationDate: ${new Date().toISOString()}`,
+    '%%LanguageLevel: 2',
+    '%%Pages: 1',
+    '%%EndComments',
+    '%%BeginProlog',
+    '/R { rectfill } bind def',
+    '%%EndProlog',
+    '%%Page: 1 1',
+    'gsave',
+    `${(W / total).toFixed(6)} dup scale`,
+  ];
+  if (!transparentBg) out.push(`${rgb(opts.color.light)} setrgbcolor`, `0 0 ${total} ${total} R`);
+  out.push(`${rgb(opts.color.dark)} setrgbcolor`);
+  for (let r = 0; r < n; r++) {
+    const y = total - 1 - (r + m); // PostScript's origin is bottom-left
+    let c = 0, line = [];
+    while (c < n) {
+      if (!qr.modules.get(r, c)) { c++; continue; }
+      const start = c;
+      while (c < n && qr.modules.get(r, c)) c++;
+      line.push(`${start + m} ${y} ${c - start} 1 R`);
+    }
+    if (line.length) out.push(line.join(' '));
+  }
+  out.push('grestore', 'showpage', '%%EOF', '');
+  return out.join('\n');
+}
 
 // ---------- dynamic code management API ----------
 

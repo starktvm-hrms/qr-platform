@@ -183,6 +183,14 @@ async function renderSvg(data, style) {
   return new Blob([svg], { type: 'image/svg+xml' });
 }
 
+// EPS is rendered by the server as pure vector. A center logo (raster) isn't included.
+async function renderEps(data, style) {
+  const res = await fetch(qrUrl(data, style, 'eps', style.size || 1024));
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not render EPS');
+  if (style.logo) toast('Note: the center logo is not included in EPS files');
+  return res.blob();
+}
+
 // ---------- STATIC generator ----------
 const STATIC_TYPES = {
   url: {
@@ -269,7 +277,7 @@ const updateStatic = debounce(async () => {
   const style = staticDesign.get();
   $('#static-payload').textContent = staticPayload;
   $('#static-warn').textContent = staticPayload ? contrastWarning(style) : '';
-  $('#static-png').disabled = $('#static-svg').disabled = !staticPayload;
+  $('#static-png').disabled = $('#static-svg').disabled = $('#static-eps').disabled = !staticPayload;
   const img = $('#static-preview');
   $('#static-empty').hidden = !!staticPayload;
   if (!staticPayload) { img.removeAttribute('src'); return; }
@@ -283,6 +291,10 @@ const updateStatic = debounce(async () => {
 $('#static-png').addEventListener('click', async () => {
   const blob = await renderPng(staticPayload, staticDesign.get());
   download(URL.createObjectURL(blob), `qr-${staticType}.png`);
+});
+$('#static-eps').addEventListener('click', async () => {
+  const blob = await renderEps(staticPayload, staticDesign.get());
+  download(URL.createObjectURL(blob), `qr-${staticType}.eps`);
 });
 $('#static-svg').addEventListener('click', async () => {
   const blob = await renderSvg(staticPayload, staticDesign.get());
@@ -333,6 +345,7 @@ function renderList() {
         <button class="btn sm" data-act="copy">Copy link</button>
         <button class="btn sm" data-act="png">PNG</button>
         <button class="btn sm" data-act="svg">SVG</button>
+        <button class="btn sm" data-act="eps">EPS</button>
         <button class="btn sm" data-act="toggle">${c.active ? 'Pause' : 'Resume'}</button>
         <button class="btn sm danger" data-act="delete">Delete</button>
       </div>
@@ -353,6 +366,7 @@ async function codeAction(act, c) {
     if (act === 'copy') { await navigator.clipboard.writeText(c.shortUrl); return toast('Link copied'); }
     if (act === 'png') return download(URL.createObjectURL(await renderPng(c.shortUrl, { ...styleOf(c), size: 1024 })), `${slugify(c.name)}.png`);
     if (act === 'svg') return download(URL.createObjectURL(await renderSvg(c.shortUrl, styleOf(c))), `${slugify(c.name)}.svg`);
+    if (act === 'eps') return download(URL.createObjectURL(await renderEps(c.shortUrl, { ...styleOf(c), size: 1024 })), `${slugify(c.name)}.eps`);
     if (act === 'toggle') { await api(`/dynamic/${c.id}`, { method: 'PATCH', body: { active: !c.active } }); toast(c.active ? 'Paused' : 'Resumed'); }
     if (act === 'delete') {
       if (!confirm(`Delete "${c.name}"? Printed copies of this QR will stop working.`)) return;
@@ -423,6 +437,7 @@ async function openDrawer(id) {
           <button class="btn sm" data-act="copy">Copy</button>
           <button class="btn sm" data-act="png">PNG</button>
           <button class="btn sm" data-act="svg">SVG</button>
+          <button class="btn sm" data-act="eps">EPS</button>
           <button class="btn sm" data-act="toggle">${d.active ? 'Pause' : 'Resume'}</button>
         </div>
       </div>
@@ -647,10 +662,12 @@ const updateVcard = debounce(async () => {
 
   if (isStatic) {
     vcActions(`<button type="button" class="btn primary" data-vc="png">Download PNG</button>
-      <button type="button" class="btn" data-vc="svg">SVG</button><button type="button" class="btn" data-vc="vcf">.vcf file</button>`);
+      <button type="button" class="btn" data-vc="svg">SVG</button><button type="button" class="btn" data-vc="eps">EPS</button>
+      <button type="button" class="btn" data-vc="vcf">.vcf file</button>`);
   } else if (vcEditId) {
     vcActions(`<button type="button" class="btn primary" data-vc="save">Save changes</button>
       <button type="button" class="btn" data-vc="png">PNG</button><button type="button" class="btn" data-vc="svg">SVG</button>
+      <button type="button" class="btn" data-vc="eps">EPS</button>
       <button type="button" class="btn" data-vc="new">New vCard</button>`);
   } else {
     vcActions(`<button type="button" class="btn primary" data-vc="create">Create vCard QR</button>`);
@@ -670,6 +687,7 @@ async function vcAction(act) {
     const qrData = $('#vc-static').checked && !vcEditId ? text : vcShortUrl;
     if (act === 'png') return download(URL.createObjectURL(await renderPng(qrData, { ...style, size: 1024 })), `${vcFileName()}.png`);
     if (act === 'svg') return download(URL.createObjectURL(await renderSvg(qrData, style)), `${vcFileName()}.svg`);
+    if (act === 'eps') return download(URL.createObjectURL(await renderEps(qrData, { ...style, size: 1024 })), `${vcFileName()}.eps`);
     if (act === 'vcf') return download(URL.createObjectURL(new Blob([VCard.build(card)], { type: 'text/vcard' })), `${vcFileName()}.vcf`);
     const { dark, light, ecc, margin } = style;
     const body = { type: 'vcard', name: vcForm.elements.qrName.value.trim(), vcard: readVcard(), style: { dark, light, ecc, margin } };
@@ -725,4 +743,6 @@ document.addEventListener('click', (e) => {
   e.preventDefault(); $(`.tab[data-view="${g.dataset.goto}"]`).click();
 });
 // deep link to tab
-{ const t = $(`.tab[data-view="${location.hash.slice(1)}"]`); if (t) t.click(); }
+function tabFromHash() { const t = $(`.tab[data-view="${location.hash.slice(1)}"]`); if (t && !t.classList.contains('active')) t.click(); }
+addEventListener('hashchange', tabFromHash);
+tabFromHash();
