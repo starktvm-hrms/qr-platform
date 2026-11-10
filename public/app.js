@@ -516,7 +516,28 @@ const COUNTRIES = [
 ];
 const vcForm = $('#vc-form');
 const vcDesign = designControls($('#vc-design'), { onChange: () => updateVcard() });
-let vcEditId = null, vcShortUrl = '', vcPhoto = '', vcSubmitted = false, vcPreview = 'card', vcQrUrl;
+let vcEditId = null, vcShortUrl = '', vcPhoto = '', vcSubmitted = false, vcPreview = 'card', vcQrUrl, vcTemplate = 'classic';
+
+// ----- template picker (mini mock-ups drawn in CSS, tinted with the card colour) -----
+const MINIS = {
+  classic: '<i class="hd"></i><i class="av"></i><i class="ln a"></i><i class="ln s b"></i><i class="q q1"></i><i class="q q2"></i><i class="q q3"></i><i class="ln r1"></i><i class="ln r2"></i><i class="ln r3"></i>',
+  banner: '<i class="pn"></i><i class="av"></i><i class="ln a"></i><i class="ln s b"></i><i class="bar"></i><i class="dot d1"></i><i class="dot d2"></i><i class="dot d3"></i><i class="ln r1"></i><i class="ln r2"></i><i class="ln r3"></i>',
+  bold: '<i class="av"></i><i class="ln a"></i><i class="ln s b"></i><i class="bx x1"></i><i class="bx x2"></i><i class="bx x3"></i><i class="ft"></i>',
+  bubbles: '<i class="b1"></i><i class="b2"></i><i class="b3"></i><i class="av"></i><i class="ln a"></i><i class="ln s b"></i><i class="dot d1"></i><i class="dot d2"></i><i class="dot d3"></i><i class="ln r1"></i><i class="ln r2"></i><i class="ln r3"></i>',
+  cover: '<i class="cv"></i><i class="wv"></i><i class="vl"></i><i class="ln a"></i><i class="ln b"></i><i class="ln r1"></i><i class="ln r2"></i>',
+};
+$('#vc-templates').innerHTML = Object.entries(VCard.TEMPLATES).map(([k, label]) =>
+  `<button type="button" class="tpl" role="radio" data-tpl="${k}" aria-checked="false"><span class="mini m-${k}">${MINIS[k]}</span>${label}</button>`).join('');
+$$('#vc-templates [data-tpl]').forEach((b) => b.addEventListener('click', () => { setTemplate(b.dataset.tpl); updateVcard(); }));
+function setTemplate(t) {
+  vcTemplate = VCard.TEMPLATES[t] ? t : 'classic';
+  $$('#vc-templates [data-tpl]').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.tpl === vcTemplate)));
+}
+function tintMinis() {
+  const c = $('#vc-color').value, p = VCard.palette(c);
+  $$('#vc-templates .mini').forEach((m) => { m.style.setProperty('--c', c); m.style.setProperty('--c2', p.c2); m.style.setProperty('--t', p.tint); });
+}
+$$('[data-soc-icon]').forEach((el) => { el.innerHTML = VCard.icon(el.dataset.socIcon, 20); });
 
 const plusBtn = (kind, first) => first
   ? `<button type="button" class="icon-btn" data-add="${kind}" title="Add another" aria-label="Add another">+</button>`
@@ -576,6 +597,8 @@ function readVcard() {
   return {
     firstName: f.firstName.value, lastName: f.lastName.value, company: f.company.value, jobTitle: f.jobTitle.value,
     birthday: f.birthday.value, address: f.address.value, color: f.color.value, photo: vcPhoto,
+    about: f.about.value, template: vcTemplate,
+    socials: Object.fromEntries(Object.keys(VCard.SOCIALS).map((k) => [k, f['soc_' + k].value])),
     phones: $$('[data-row="phone"]', vcForm).map((r) => {
       const number = $('[data-f="number"]', r).value.trim();
       const code = (COUNTRIES.find(([iso]) => iso === $('[data-f="cc"]', r).value) || [])[1];
@@ -617,7 +640,7 @@ $('#vc-photo-input').addEventListener('change', async (e) => {
   try { setPhoto(await resizePhoto(file)); } catch (err) { toast(err.message); }
 });
 
-$('#vc-color').addEventListener('input', (e) => { $('#vc-color-hex').textContent = e.target.value.toUpperCase(); });
+$('#vc-color').addEventListener('input', (e) => { $('#vc-color-hex').textContent = e.target.value.toUpperCase(); tintMinis(); });
 $('#vc-dob').max = new Date().toISOString().slice(0, 10);
 vcForm.addEventListener('input', () => updateVcard());
 vcForm.addEventListener('change', () => updateVcard());
@@ -727,8 +750,11 @@ async function vcAction(act) {
 
 function fillVcard(card = {}, { name = '', style } = {}) {
   vcForm.reset();
-  for (const k of ['firstName', 'lastName', 'company', 'jobTitle', 'birthday', 'address']) vcForm.elements[k].value = card[k] || '';
+  for (const k of ['firstName', 'lastName', 'company', 'jobTitle', 'birthday', 'address', 'about']) vcForm.elements[k].value = card[k] || '';
+  for (const k of Object.keys(VCard.SOCIALS)) vcForm.elements['soc_' + k].value = (card.socials || {})[k] || '';
   vcForm.elements.color.value = card.color || '#4f46e5';
+  setTemplate(card.template || 'classic');
+  tintMinis();
   $('#vc-color-hex').textContent = vcForm.elements.color.value.toUpperCase();
   vcForm.elements.qrName.value = name;
   setRows('phone', card.phones); setRows('email', card.emails); setRows('website', card.websites);

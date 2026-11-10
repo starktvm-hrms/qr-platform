@@ -12,7 +12,8 @@ A self-hosted platform for creating **static** and **dynamic** QR codes.
 ## Features
 
 - **Static types:** URL, plain text, Wi‑Fi, email, SMS, phone, geo location
-- **vCard QR codes:** first and last name, company, job title, photo, date of birth, up to 5 phones (type and country code), emails and websites, address, and card color.
+- **vCard QR codes:** first and last name, company, job title, photo, about text, date of birth, up to 5 phones (type and country code), emails and websites, address, social profiles (LinkedIn, Instagram, Facebook, X, YouTube), and card color.
+  - **5 card templates:** Classic, Banner, Bold, Bubbles and Cover, all tinted with your card color. You can switch templates any time without changing the printed QR.
   - **Dynamic (default):** opens a hosted mobile contact card (`/r/<slug>`) with Call, Email and Website buttons and **Add to contacts** (`/r/<slug>/vcf`). It's editable, trackable, and includes the photo.
   - **Static:** the vCard text is stored in the QR itself. The photo isn't included, and you can also download a `.vcf` file.
 - **Dynamic codes:** custom slugs, editable destination, pause/resume, delete, destination history

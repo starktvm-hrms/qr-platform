@@ -93,13 +93,26 @@
             <i class="help" title="Added to the contact as their birthday.">?</i>
           </div>
 
+          <div class="fl fl-area"><textarea name="about" placeholder=" " maxlength="400" rows="3"></textarea><span>Personal description / About</span><i class="help" title="A short bio shown on the card, e.g. what you do. Up to 400 characters.">?</i></div>
+
           <h4>Contacts <em>– optional</em></h4>
           <div id="vc-phones" class="multi"></div>
           <div id="vc-emails" class="multi"></div>
           <div id="vc-websites" class="multi"></div>
           <div class="fl"><input name="address" placeholder=" " maxlength="300" /><span>Address</span><i class="help" title="Opens in Google Maps when tapped on the card.">?</i></div>
 
+          <h4>Social profiles <em>– optional</em></h4>
+          <div class="socials-grid">
+            <div class="fl"><span class="soc-ic" data-soc-icon="linkedin"></span><input name="soc_linkedin" placeholder=" " maxlength="300" /><span>LinkedIn</span></div>
+            <div class="fl"><span class="soc-ic" data-soc-icon="instagram"></span><input name="soc_instagram" placeholder=" " maxlength="300" /><span>Instagram</span></div>
+            <div class="fl"><span class="soc-ic" data-soc-icon="facebook"></span><input name="soc_facebook" placeholder=" " maxlength="300" /><span>Facebook</span></div>
+            <div class="fl"><span class="soc-ic" data-soc-icon="x"></span><input name="soc_x" placeholder=" " maxlength="300" /><span>X (Twitter)</span></div>
+            <div class="fl"><span class="soc-ic" data-soc-icon="youtube"></span><input name="soc_youtube" placeholder=" " maxlength="300" /><span>YouTube</span></div>
+          </div>
+          <p class="muted small" style="margin:-4px 0 0">Paste a profile link or just the username, e.g. <code>@yourname</code>.</p>
+
           <h4>vCard Design <em>– optional</em></h4>
+          <div class="tpl-grid" id="vc-templates" role="radiogroup" aria-label="Card template"></div>
           <label class="color-box">
             <span><small>Card color</small><b id="vc-color-hex">#4F46E5</b></span>
             <input type="color" name="color" id="vc-color" value="#4f46e5" />
