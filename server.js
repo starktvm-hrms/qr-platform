@@ -126,11 +126,22 @@ function requireAdmin(req, res, next) {
 // ---------- public redirect (the "dynamic" part) ----------
 
 const findByCode = db.prepare('SELECT * FROM dynamic_codes WHERE code = ?');
+const findByAlias = db.prepare('SELECT d.* FROM code_aliases a JOIN dynamic_codes d ON d.id = a.code_id WHERE a.alias = ?');
+const resolveCode = (slug) => findByCode.get(slug) || findByAlias.get(slug);
+
+const SLUG = /^[A-Za-z0-9_-]{3,32}$/;
+// A slug is free if no other code uses it, now or as one of its old slugs.
+function slugTaken(slug, exceptId = 0) {
+  const cur = findByCode.get(slug);
+  if (cur && cur.id !== exceptId) return true;
+  const alias = db.prepare('SELECT code_id FROM code_aliases WHERE alias = ?').get(slug);
+  return !!(alias && alias.code_id !== exceptId);
+}
 const insertScan = db.prepare(`INSERT INTO scans (code_id, visitor, device, os, browser, referrer, language, country, region, city)
                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
 function liveCode(req, res) {
-  const row = findByCode.get(req.params.code);
+  const row = resolveCode(req.params.code);
   if (!row) { res.status(404).send(page('QR code not found', 'This code does not exist or was deleted.')); return null; }
   if (!row.active) { res.status(410).send(page('QR code paused', 'The owner of this QR code has paused it.')); return null; }
   return row;
@@ -337,10 +348,10 @@ api.post('/dynamic', (req, res) => {
 
   let code = String(req.body.code || '').trim();
   if (code) {
-    if (!/^[A-Za-z0-9_-]{3,32}$/.test(code)) return res.status(400).json({ error: 'Custom slug: 3-32 letters, numbers, - or _' });
-    if (findByCode.get(code)) return res.status(409).json({ error: 'That slug is already taken' });
+    if (!SLUG.test(code)) return res.status(400).json({ error: 'Custom slug: 3-32 letters, numbers, - or _' });
+    if (slugTaken(code)) return res.status(409).json({ error: 'That slug is already taken' });
   } else {
-    do { code = newCode(); } while (findByCode.get(code));
+    do { code = newCode(); } while (slugTaken(code));
   }
   const info = db.prepare('INSERT INTO dynamic_codes (code, name, target_url, style, type, payload) VALUES (?, ?, ?, ?, ?, ?)')
     .run(code, name, url, JSON.stringify(cleanStyle(req.body.style)), type, payload);
@@ -392,6 +403,8 @@ api.get('/dynamic/:id', (req, res) => {
     },
     geo: { ...geo.state },
     history: db.prepare('SELECT target_url, changed_at FROM url_history WHERE code_id = ? ORDER BY id DESC LIMIT 20').all(id),
+    aliases: db.prepare('SELECT alias, created_at FROM code_aliases WHERE code_id = ? ORDER BY created_at DESC').all(id)
+      .map((a) => ({ alias: a.alias, url: `${baseUrl(req)}/r/${a.alias}`, since: a.created_at })),
   });
 });
 
@@ -413,11 +426,33 @@ api.patch('/dynamic/:id', (req, res) => {
   }
   const active = req.body.active !== undefined ? (req.body.active ? 1 : 0) : row.active;
   const style = req.body.style !== undefined ? JSON.stringify(cleanStyle(req.body.style)) : row.style;
+  let code = row.code;
+  if (req.body.code !== undefined && String(req.body.code).trim() !== row.code) {
+    code = String(req.body.code).trim();
+    if (!SLUG.test(code)) return res.status(400).json({ error: 'Slug: 3-32 letters, numbers, - or _' });
+    if (slugTaken(code, row.id)) return res.status(409).json({ error: 'That slug is already used by another QR code' });
+  }
 
-  db.prepare(`UPDATE dynamic_codes SET name = ?, target_url = ?, active = ?, style = ?, payload = ?, updated_at = datetime('now') WHERE id = ?`)
-    .run(name, url, active, style, payload, row.id);
+  db.exec('BEGIN');
+  try {
+    if (code !== row.code) {
+      // the old slug keeps working for codes that are already printed
+      db.prepare('INSERT OR IGNORE INTO code_aliases (alias, code_id) VALUES (?, ?)').run(row.code, row.id);
+      db.prepare('DELETE FROM code_aliases WHERE alias = ? AND code_id = ?').run(code, row.id); // switching back to an old slug
+    }
+    db.prepare(`UPDATE dynamic_codes SET name = ?, code = ?, target_url = ?, active = ?, style = ?, payload = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(name, code, url, active, style, payload, row.id);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
   if (url !== row.target_url) db.prepare('INSERT INTO url_history (code_id, target_url) VALUES (?, ?)').run(row.id, url);
   res.json(serialize(getStmt.get(row.id), req, { full: true }));
+});
+
+// Stop an old slug from working (only when nothing printed uses it any more).
+api.delete('/dynamic/:id/aliases/:alias', (req, res) => {
+  const info = db.prepare('DELETE FROM code_aliases WHERE code_id = ? AND alias = ?').run(Number(req.params.id), req.params.alias);
+  if (!info.changes) return res.status(404).json({ error: 'Not found' });
+  res.status(204).end();
 });
 
 api.delete('/dynamic/:id', (req, res) => {

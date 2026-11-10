@@ -52,6 +52,13 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_static_hash ON static_codes(content_hash);
 
+  -- Previous slugs of dynamic codes. Printed QRs still contain the old link, so it keeps working.
+  CREATE TABLE IF NOT EXISTS code_aliases (
+    alias       TEXT    PRIMARY KEY,
+    code_id     INTEGER NOT NULL REFERENCES dynamic_codes(id) ON DELETE CASCADE,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS url_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     code_id     INTEGER NOT NULL REFERENCES dynamic_codes(id) ON DELETE CASCADE,

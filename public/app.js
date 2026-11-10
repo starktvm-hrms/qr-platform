@@ -724,9 +724,15 @@ function renderDynamicDetail(d) {
       <button class="btn sm" data-act="toggle">${d.active ? 'Pause' : 'Resume'}</button>
       ${d.type === 'vcard' ? `<a class="btn sm" href="${esc(d.shortUrl)}" target="_blank" rel="noopener">View card page</a>` : ''}`,
     meta: [['Created', esc(d.createdAt) + ' UTC'], ['Total scans', `<b>${d.totalScans}</b> (${d.uniqueScans} unique)`],
-      ['Last scan', d.lastScan ? esc(d.lastScan) + ' UTC' : '—']],
+      ['Last scan', d.lastScan ? esc(d.lastScan) + ' UTC' : '—'],
+      ['Old links (still working)', d.aliases.length ? `<ul class="aliases">${d.aliases.map((a) => `<li><code>${esc(a.url)}</code>
+        <button type="button" class="btn sm" data-unalias="${esc(a.alias)}">Remove</button></li>`).join('')}</ul>` : '']],
     edit: `<form class="fields" id="edit-form">
         <label>Name<input name="name" value="${esc(d.name)}" required maxlength="120" /></label>
+        <label>Short link
+          <span class="slug-input"><span class="slug-base">${esc(d.shortUrl.slice(0, d.shortUrl.length - d.code.length).replace(/^https?:\/\//, ''))}</span><input name="code" value="${esc(d.code)}" required maxlength="32" spellcheck="false" autocomplete="off" /></span>
+          <span class="muted small" style="font-weight:400">3–32 letters, numbers, - or _. Changing it changes the QR image; codes already printed keep working because the old link keeps redirecting.</span>
+        </label>
         ${d.type === 'vcard' ? '' : `<label>Destination URL <span class="muted">— change it any time, the printed QR stays the same</span>
           <input name="targetUrl" value="${esc(d.targetUrl)}" required /></label>`}
         <p class="error" id="edit-error"></p>
@@ -752,10 +758,24 @@ function renderDynamicDetail(d) {
     </div>`,
   });
   $$('[data-act]', body).forEach((b) => b.addEventListener('click', () => codeAction(b.dataset.act, d)));
+  $$('[data-unalias]', body).forEach((b) => b.addEventListener('click', async () => {
+    const a = b.dataset.unalias;
+    if (!confirm(`Stop the old link /r/${a} from working?\n\nAny QR code printed with it will show "not found" after this.`)) return;
+    try { await api(`/dynamic/${d.id}/aliases/${encodeURIComponent(a)}`, { method: 'DELETE' }); toast('Old link removed'); openDetail('dynamic', d.id); }
+    catch (err) { toast(err.message); }
+  }));
   $('#edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = readForm(e.target);
     const payload = { name: f.name };
+    const slug = (f.code || '').trim();
+    if (!/^[A-Za-z0-9_-]{3,32}$/.test(slug)) { $('#edit-error').textContent = 'Short link: use 3–32 letters, numbers, - or _ (no spaces).'; return; }
+    if (slug !== d.code) {
+      if (!confirm(`Change the short link to ${d.shortUrl.slice(0, d.shortUrl.length - d.code.length)}${slug}?\n\n`
+        + `The QR image will change, so download it again for new prints. Codes already printed keep working: `
+        + `the old link /r/${d.code} keeps redirecting.`)) return;
+      payload.code = slug;
+    }
     if (d.type !== 'vcard') {
       payload.targetUrl = f.targetUrl.trim();
       if (payload.targetUrl && !/^https?:\/\//i.test(payload.targetUrl)) payload.targetUrl = 'https://' + payload.targetUrl;

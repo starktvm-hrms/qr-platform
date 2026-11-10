@@ -18,7 +18,7 @@ A self-hosted platform for creating **static** and **dynamic** QR codes.
   - **5 card templates:** Classic, Banner, Bold, Bubbles and Cover, all tinted with your card color. You can switch templates any time without changing the printed QR.
   - **Dynamic (default):** opens a hosted mobile contact card (`/r/<slug>`) with Call, Email and Website buttons and **Add to contacts** (`/r/<slug>/vcf`). It's editable, trackable, and includes the photo.
   - **Static:** the vCard text is stored in the QR itself. The photo isn't included, and you can also download a `.vcf` file.
-- **Dynamic codes:** custom slugs, editable destination, pause/resume, delete, destination history
+- **Dynamic codes:** custom slugs (editable later), editable destination, pause/resume, delete, destination history. When a slug changes, the old link keeps redirecting so printed codes don't break; old links are listed on the code's page and can be removed.
 - **Design:** foreground/background colors, transparent background, error correction level, quiet zone, size up to 2048 px, center logo (auto-switches to high error correction), contrast warnings
 - **Export:** PNG, SVG, EPS and PDF. EPS and PDF are pure vector for print shops, Illustrator and CorelDRAW. The center logo is included in PNG and SVG only.
 - **Privacy-friendly analytics:** visitors are counted with a salted hash, and raw IPs are never stored
@@ -57,7 +57,8 @@ All under `/api` (Basic auth if `ADMIN_PASSWORD` is set).
 - `POST /api/dynamic` `{ name, targetUrl, code?, style? }`: create a redirect
 - `POST /api/dynamic` `{ type: "vcard", vcard: {…}, name?, code?, style? }`: create a contact card
 - `GET /api/dynamic/:id?days=30`: details, stats and history
-- `PATCH /api/dynamic/:id` `{ name?, targetUrl?, active?, style? }`: update
+- `PATCH /api/dynamic/:id` `{ name?, code?, targetUrl?, vcard?, active?, style? }`: update (changing `code`, the slug, keeps the old one working)
+- `DELETE /api/dynamic/:id/aliases/:alias`: stop an old slug from working
 - `DELETE /api/dynamic/:id`
 - `GET /api/dynamic/:id/scans.csv`: export scans
 - `GET /api/codes`: every code, static and dynamic, with its kind, type and a short summary
