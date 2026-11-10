@@ -37,13 +37,22 @@ function download(href, filename) {
 }
 const slugify = (s) => (s || 'qr-code').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'qr-code';
 
-// ---------- tabs ----------
-$$('.tab').forEach((b) => b.addEventListener('click', () => {
-  $$('.tab').forEach((x) => x.classList.toggle('active', x === b));
-  $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + b.dataset.view));
-  if (b.dataset.view === 'dynamic') loadDynamic();
-  history.replaceState(null, '', '#' + b.dataset.view);
-}));
+// ---------- navigation (hash routes: #dashboard, #static, #vcard, #dynamic, #qr/d/12, #qr/s/5) ----------
+function showView(name) {
+  $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + name));
+  $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
+}
+function route() {
+  const h = location.hash.slice(1) || 'dashboard';
+  const m = h.match(/^qr\/([ds])\/(\d+)$/);
+  if (m) { showView('detail'); scrollTo({ top: 0 }); return openDetail(m[1] === 'd' ? 'dynamic' : 'static', Number(m[2])); }
+  const view = $(`.tab[data-view="${h}"]`) ? h : 'dashboard';
+  showView(view);
+  if (view === 'dynamic') loadDynamic();
+  if (view === 'dashboard') loadDashboard();
+}
+const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
+$$('.tab').forEach((b) => b.addEventListener('click', () => go('#' + b.dataset.view)));
 
 // ---------- reusable design controls ----------
 function designControls(container, { logo = false, onChange }) {
@@ -89,8 +98,8 @@ function designControls(container, { logo = false, onChange }) {
   }));
   $('[data-transparent]', container).addEventListener('change', fire);
 
+  const file = logo && $('[data-logo]', container), prev = logo && $('[data-logo-preview]', container), clear = logo && $('[data-logo-clear]', container);
   if (logo) {
-    const file = $('[data-logo]', container), prev = $('[data-logo-preview]', container), clear = $('[data-logo-clear]', container);
     file.addEventListener('change', () => {
       const f = file.files[0]; if (!f) return;
       const r = new FileReader();
@@ -123,6 +132,11 @@ function designControls(container, { logo = false, onChange }) {
         $('[data-transparent]', container).checked = style.light.length === 9;
       }
       const out = $('[data-out="margin"]', container); if (out) out.textContent = state.margin;
+      if (logo) {
+        state.logo = style.logo || null; file.value = '';
+        if (state.logo) prev.src = state.logo;
+        prev.hidden = clear.hidden = !state.logo;
+      }
     },
   };
 }
@@ -273,9 +287,11 @@ $$('#static-types .chip').forEach((c) => c.addEventListener('click', () => setSt
 staticForm.addEventListener('input', () => updateStatic());
 staticForm.addEventListener('submit', (e) => e.preventDefault());
 
-let staticPayload = '', previewUrl;
+let staticPayload = '', previewUrl, staticEditId = null, staticSavedFor = '';
 const updateStatic = debounce(async () => {
   staticPayload = STATIC_TYPES[staticType].build(readForm(staticForm)) || '';
+  $('#static-save').disabled = !staticPayload;
+  if (staticSavedFor !== staticType + staticPayload) setStaticSaved(staticEditId ? 'editing' : '');
   const style = staticDesign.get();
   $('#static-payload').textContent = staticPayload;
   $('#static-warn').textContent = staticPayload ? contrastWarning(style) : '';
@@ -290,22 +306,58 @@ const updateStatic = debounce(async () => {
   } catch (e) { $('#static-warn').textContent = e.message; }
 });
 
-$('#static-png').addEventListener('click', async () => {
-  const blob = await renderPng(staticPayload, staticDesign.get());
-  download(URL.createObjectURL(blob), `qr-${staticType}.png`);
+function setStaticSaved(state, id) {
+  const el = $('#static-saved');
+  if (state === 'saved') el.innerHTML = `✓ Saved to dashboard · <a href="#qr/s/${id}">View</a>`;
+  else if (state === 'editing') el.innerHTML = `Editing a saved code · <a href="#" data-static-new>Save as a new code instead</a>`;
+  else el.textContent = '';
+  $('#static-save').textContent = staticEditId ? 'Save changes' : 'Save to dashboard';
+}
+$('#static-saved').addEventListener('click', (e) => {
+  if (!e.target.closest('[data-static-new]')) return;
+  e.preventDefault(); staticEditId = null; staticSavedFor = ''; setStaticSaved('');
 });
-$('#static-pdf').addEventListener('click', async () => {
-  const blob = await renderPdf(staticPayload, staticDesign.get());
-  download(URL.createObjectURL(blob), `qr-${staticType}.pdf`);
-});
-$('#static-eps').addEventListener('click', async () => {
-  const blob = await renderEps(staticPayload, staticDesign.get());
-  download(URL.createObjectURL(blob), `qr-${staticType}.eps`);
-});
-$('#static-svg').addEventListener('click', async () => {
-  const blob = await renderSvg(staticPayload, staticDesign.get());
-  download(URL.createObjectURL(blob), `qr-${staticType}.svg`);
-});
+async function saveStatic({ download: dl = false } = {}) {
+  if (!staticPayload) return;
+  const r = await api('/static', { method: 'POST', body: {
+    id: staticEditId || undefined, name: $('#static-name').value.trim(), contentType: staticType,
+    payload: staticPayload, fields: readForm(staticForm), style: staticDesign.get(), download: dl,
+  } });
+  staticSavedFor = staticType + staticPayload;
+  if (staticEditId) staticEditId = r.id;
+  setStaticSaved('saved', r.id);
+  return r;
+}
+$('#static-save').addEventListener('click', () => saveStatic().then(() => toast('Saved to dashboard')).catch((e) => toast(e.message)));
+
+const staticFile = () => slugify($('#static-name').value || 'qr-' + staticType);
+for (const [fmt, render] of [['png', renderPng], ['pdf', renderPdf], ['eps', renderEps], ['svg', renderSvg]]) {
+  $('#static-' + fmt).addEventListener('click', async () => {
+    try {
+      const blob = await render(staticPayload, staticDesign.get());
+      download(URL.createObjectURL(blob), `${staticFile()}.${fmt}`);
+      saveStatic({ download: true }).catch(() => {}); // downloads are kept on the dashboard
+    } catch (e) { toast(e.message); }
+  });
+}
+
+// Open a saved static code in the generator to change it.
+function editStatic(c) {
+  if (c.contentType === 'vcard') return editStaticVcard(c);
+  staticEditId = c.id;
+  go('#static');
+  setStaticType(c.contentType);
+  for (const el of staticForm.elements) {
+    if (!el.name || !(el.name in (c.fields || {}))) continue;
+    if (el.type === 'checkbox') el.checked = !!c.fields[el.name]; else el.value = c.fields[el.name];
+  }
+  $('#static-name').value = c.name;
+  staticDesign.set(c.style || {});
+  staticSavedFor = '';
+  setStaticSaved('editing');
+  updateStatic();
+  scrollTo({ top: 0 });
+}
 
 setStaticType('url');
 
@@ -368,8 +420,8 @@ $('#dyn-list').addEventListener('click', (e) => {
 
 async function codeAction(act, c) {
   try {
-    if (act === 'open') return openDrawer(c.id);
-    if (act === 'editvc') { closeDrawer(); return editVcard(c.id); }
+    if (act === 'open') return go(`#qr/d/${c.id}`);
+    if (act === 'editvc') return editVcard(c.id);
     if (act === 'copy') { await navigator.clipboard.writeText(c.shortUrl); return toast('Link copied'); }
     if (act === 'png') return download(URL.createObjectURL(await renderPng(c.shortUrl, { ...styleOf(c), size: 1024 })), `${slugify(c.name)}.png`);
     if (act === 'svg') return download(URL.createObjectURL(await renderSvg(c.shortUrl, styleOf(c))), `${slugify(c.name)}.svg`);
@@ -378,11 +430,12 @@ async function codeAction(act, c) {
     if (act === 'toggle') { await api(`/dynamic/${c.id}`, { method: 'PATCH', body: { active: !c.active } }); toast(c.active ? 'Paused' : 'Resumed'); }
     if (act === 'delete') {
       if (!confirm(`Delete "${c.name}"? Printed copies of this QR will stop working.`)) return;
-      await api(`/dynamic/${c.id}`, { method: 'DELETE' }); toast('Deleted'); closeDrawer();
+      await api(`/dynamic/${c.id}`, { method: 'DELETE' }); toast('Deleted');
       if (vcEditId === c.id) resetVcard();
+      if (location.hash === `#qr/d/${c.id}`) return go('#dashboard');
     }
+    if (location.hash === `#qr/d/${c.id}`) return openDetail('dynamic', c.id);
     await loadDynamic();
-    if (!$('#drawer').hidden && act === 'toggle') openDrawer(c.id);
   } catch (err) { toast(err.message); }
 }
 
@@ -397,15 +450,320 @@ $('#dyn-form').addEventListener('submit', async (e) => {
     const c = await api('/dynamic', { method: 'POST', body: { name: f.name, targetUrl: url, code: f.code || undefined, style: { dark, light, ecc, margin } } });
     e.target.reset();
     toast('Dynamic QR created');
-    await loadDynamic();
-    openDrawer(c.id);
+    go(`#qr/d/${c.id}`);
   } catch (err) { $('#dyn-error').textContent = err.message; }
 });
 
-// ---------- detail drawer ----------
-function closeDrawer() { $('#drawer').hidden = $('#drawer-backdrop').hidden = true; }
-$('#drawer-backdrop').addEventListener('click', closeDrawer);
-document.addEventListener('keydown', (e) => e.key === 'Escape' && closeDrawer());
+// ---------- QR code types ----------
+const TYPE_META = {
+  url: { label: 'URL', icon: 'web' }, vcard: { label: 'vCard', icon: 'person' }, wifi: { label: 'Wi-Fi', icon: 'wifi' },
+  text: { label: 'Text', icon: 'text' }, email: { label: 'Email', icon: 'mail' }, sms: { label: 'SMS', icon: 'sms' },
+  phone: { label: 'Phone', icon: 'phone' }, geo: { label: 'Location', icon: 'pin' },
+};
+const EXTRA_ICONS = {
+  person: '<path d="M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9zm0 2c-4 0-8 2-8 5v2h16v-2c0-3-4-5-8-5z"/>',
+  wifi: '<path d="M12 17.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM12 12.5c2.3 0 4.4.9 6 2.4l-1.5 1.5A6.4 6.4 0 0 0 12 14.6a6.4 6.4 0 0 0-4.5 1.8L6 14.9a8.5 8.5 0 0 1 6-2.4zm0-5c3.7 0 7.1 1.5 9.6 3.9l-1.5 1.5A11.4 11.4 0 0 0 12 9.6a11.4 11.4 0 0 0-8.1 3.3l-1.5-1.5A13.5 13.5 0 0 1 12 7.5z"/>',
+  text: '<path d="M4 5h16v2.5h-6.7V19h-2.6V7.5H4z"/>',
+  sms: '<path d="M5 3h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2zm2 6v2h2V9H7zm4 0v2h2V9h-2zm4 0v2h2V9h-2z"/>',
+};
+function typeIcon(t, size = 16) {
+  const name = (TYPE_META[t] || TYPE_META.url).icon;
+  return EXTRA_ICONS[name]
+    ? `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" aria-hidden="true">${EXTRA_ICONS[name]}</svg>`
+    : VCard.icon(name, size);
+}
+const typeLabel = (t) => (TYPE_META[t] || { label: t }).label;
+const typeBadge = (t) => `<span class="tb tb-${esc(t)}">${typeIcon(t, 13)}${esc(typeLabel(t))}</span>`;
+const kindBadge = (k) => `<span class="kb kb-${k}">${k === 'dynamic' ? 'Dynamic' : 'Static'}</span>`;
+const dateOnly = (s) => (s || '').slice(0, 10);
+
+// ---------- dashboard: every QR code ----------
+let allCodes = [], dashKind = 'all', dashType = 'all';
+async function loadDashboard() {
+  try {
+    const [codes, ov] = await Promise.all([api('/codes'), api('/overview')]);
+    allCodes = codes;
+    $('#dash-stats').innerHTML = [
+      ['QR codes', codes.length], ['Dynamic', ov.dynamicCodes], ['Static', ov.staticCodes], ['Total scans', ov.totalScans],
+    ].map(([k, v]) => `<div class="stat"><b>${v.toLocaleString()}</b><span>${k}</span></div>`).join('');
+    renderDash();
+  } catch (e) { toast(e.message); }
+}
+function renderDash() {
+  // type chips with counts (within the selected kind)
+  const inKind = allCodes.filter((c) => dashKind === 'all' || c.kind === dashKind);
+  const counts = {};
+  inKind.forEach((c) => { counts[c.contentType] = (counts[c.contentType] || 0) + 1; });
+  if (dashType !== 'all' && !counts[dashType]) dashType = 'all';
+  $('#dash-types').innerHTML = `<button class="chip ${dashType === 'all' ? 'active' : ''}" data-type="all">All types <span class="n">${inKind.length}</span></button>` +
+    Object.keys(TYPE_META).filter((t) => counts[t]).map((t) =>
+      `<button class="chip ${dashType === t ? 'active' : ''}" data-type="${t}">${typeIcon(t, 14)} ${typeLabel(t)} <span class="n">${counts[t]}</span></button>`).join('');
+
+  const q = $('#dash-search').value.trim().toLowerCase();
+  const sort = $('#dash-sort').value;
+  const list = inKind
+    .filter((c) => dashType === 'all' || c.contentType === dashType)
+    .filter((c) => !q || [c.name, c.summary, c.data, typeLabel(c.contentType)].some((v) => String(v || '').toLowerCase().includes(q)))
+    .sort((a, b) => sort === 'old' ? (a.createdAt > b.createdAt ? 1 : -1)
+      : sort === 'name' ? a.name.localeCompare(b.name)
+      : sort === 'scans' ? (b.totalScans || 0) - (a.totalScans || 0)
+      : (a.createdAt < b.createdAt ? 1 : -1));
+
+  const grid = $('#dash-grid');
+  if (!allCodes.length) {
+    grid.innerHTML = `<div class="empty">No QR codes yet.<br />Create a <a href="#static">static QR</a>, a <a href="#vcard">vCard</a> or a <a href="#dynamic">dynamic QR</a>. They'll all show up here.</div>`;
+    return;
+  }
+  if (!list.length) { grid.innerHTML = '<div class="empty">No QR codes match these filters.</div>'; return; }
+  grid.innerHTML = list.map((c) => {
+    const href = `#qr/${c.kind === 'dynamic' ? 'd' : 's'}/${c.id}`;
+    const meta = c.kind === 'dynamic'
+      ? `${(c.totalScans || 0).toLocaleString()} scan${c.totalScans === 1 ? '' : 's'} · created ${dateOnly(c.createdAt)}`
+      : `Not tracked · created ${dateOnly(c.createdAt)}`;
+    return `<article class="qcard" data-key="${c.kind}-${c.id}">
+      <a class="qlink" href="${href}">
+        <span class="qthumb"><img src="${qrUrl(c.data, styleOf(c), 'png', 220)}" alt="" loading="lazy" /></span>
+        <span class="qbody">
+          <span class="qname">${esc(c.name)}</span>
+          <span class="badges">${kindBadge(c.kind)}${typeBadge(c.contentType)}${c.kind === 'dynamic' && !c.active ? '<span class="badge off">Paused</span>' : ''}</span>
+          <span class="qsum">${esc(c.summary || '')}</span>
+          <span class="qmeta">${meta}</span>
+        </span>
+      </a>
+      <div class="qact">
+        <a class="btn sm" href="${href}">Open</a>
+        <button class="btn sm" data-dl="png">PNG</button><button class="btn sm" data-dl="svg">SVG</button>
+        <button class="btn sm" data-dl="pdf">PDF</button><button class="btn sm" data-dl="eps">EPS</button>
+      </div>
+    </article>`;
+  }).join('');
+}
+$('#dash-kind').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-kind]'); if (!b) return;
+  dashKind = b.dataset.kind;
+  $$('#dash-kind button').forEach((x) => x.classList.toggle('active', x === b));
+  renderDash();
+});
+$('#dash-types').addEventListener('click', (e) => { const b = e.target.closest('[data-type]'); if (b) { dashType = b.dataset.type; renderDash(); } });
+$('#dash-search').addEventListener('input', renderDash);
+$('#dash-sort').addEventListener('change', renderDash);
+$('#dash-grid').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-dl]'); if (!b) return;
+  const [kind, id] = b.closest('.qcard').dataset.key.split('-');
+  try {
+    // static codes may carry a centre logo, which the list leaves out, so fetch the full code
+    const c = kind === 'static' ? await api(`/static/${id}`) : allCodes.find((x) => x.kind === kind && String(x.id) === id);
+    await downloadCode(c.data, styleOf(c), b.dataset.dl, c.name);
+  } catch (err) { toast(err.message); }
+});
+
+async function downloadCode(data, style, fmt, name) {
+  const render = { png: renderPng, svg: renderSvg, pdf: renderPdf, eps: renderEps }[fmt];
+  const blob = await render(data, { ...style, size: 1024 });
+  download(URL.createObjectURL(blob), `${slugify(name)}.${fmt}`);
+}
+
+// ---------- detail page: one QR code ----------
+const TYPE_EXPLAIN = {
+  dynamic: {
+    url: 'Scanning opens a short link on your server that redirects to the destination below. You can change the destination at any time, pause the code, and every scan is tracked.',
+    vcard: 'Scanning opens a hosted contact card with an Add to contacts button. You can edit the details or template at any time, and every scan is tracked.',
+  },
+  static: {
+    url: 'The link is stored inside the QR code itself.',
+    text: 'The text is stored inside the QR code itself and shown when scanned.',
+    wifi: 'The Wi-Fi network details are stored inside the QR code; scanning offers to join the network.',
+    email: 'A pre-filled email is stored inside the QR code; scanning opens the mail app.',
+    sms: 'A pre-filled text message is stored inside the QR code; scanning opens the messaging app.',
+    phone: 'The phone number is stored inside the QR code; scanning offers to call it.',
+    geo: 'The map location is stored inside the QR code; scanning opens it in a maps app.',
+    vcard: 'The contact details are stored inside the QR code; scanning offers to save the contact (without a photo).',
+  },
+};
+const STATIC_NOTE = ' It works offline, but it can’t be changed or tracked after printing.';
+const kvl = (rows) => `<dl class="kvl">${rows.filter((r) => r && r[1] !== '' && r[1] != null)
+  .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
+const safeLink = (u) => /^https?:\/\//i.test(u || '') ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>` : esc(u);
+const pre = (t) => t ? `<pre class="ptext">${esc(t)}</pre>` : '';
+
+function contactRows(card) {
+  return [
+    ['Name', esc(VCard.fullName(card))],
+    ['Company', esc(card.company || '')],
+    ['Job title', esc(card.jobTitle || '')],
+    ...(card.phones || []).map((ph) => [`Phone (${(VCard.PHONE_TYPES[ph.type] || {}).label || 'Phone'})`, `<a href="tel:${esc(ph.number.replace(/[^\d+]/g, ''))}">${esc(ph.number)}</a>`]),
+    ...(card.emails || []).map((e) => ['Email', `<a href="mailto:${esc(e)}">${esc(e)}</a>`]),
+    ...(card.websites || []).map((w) => ['Website', safeLink(w)]),
+    ['Address', esc(card.address || '')],
+    ['Birthday', esc(card.birthday || '')],
+    ...Object.entries(card.socials || {}).map(([k, u]) => [(VCard.SOCIALS[k] || {}).label || k, safeLink(u)]),
+    ['About', card.about ? `<span class="pre-line">${esc(card.about)}</span>` : ''],
+  ];
+}
+
+// What's inside the code, shown according to its type.
+function typeDetails(kind, type, c) {
+  const f = c.fields || {};
+  if (kind === 'dynamic' && type === 'url') return ['Destination', kvl([['Opens', safeLink(c.targetUrl)], ['Short link', `<code>${esc(c.shortUrl)}</code>`]])];
+  if (kind === 'dynamic' && type === 'vcard') {
+    return ['Contact', kvl([...contactRows(c.vcard), ['Card template', esc((VCard.TEMPLATES[c.vcard.template] || 'Classic'))],
+      ['Card page', `<a href="${esc(c.shortUrl)}" target="_blank" rel="noopener">${esc(c.shortUrl)}</a>`]])];
+  }
+  switch (type) {
+    case 'url': return ['Link', kvl([['Opens', safeLink(c.data)]])];
+    case 'text': return ['Text', pre(f.text || c.data)];
+    case 'wifi': return ['Wi-Fi network', kvl([
+      ['Network name (SSID)', esc(f.ssid || '')],
+      ['Security', esc({ WPA: 'WPA / WPA2 / WPA3', WEP: 'WEP', nopass: 'None (open network)' }[f.auth] || f.auth || '')],
+      ['Password', f.auth !== 'nopass' && f.pass ? `<span class="secret" data-secret="${esc(f.pass)}">••••••••</span> <button type="button" class="btn sm" data-reveal>Show</button>` : ''],
+      ['Hidden network', f.hidden ? 'Yes' : 'No'],
+    ])];
+    case 'email': return ['Email', kvl([['To', f.to ? `<a href="mailto:${esc(f.to)}">${esc(f.to)}</a>` : ''], ['Subject', esc(f.subject || '')], ['Message', f.body ? `<span class="pre-line">${esc(f.body)}</span>` : '']])];
+    case 'sms': return ['Text message', kvl([['To', esc(f.tel || '')], ['Message', f.msg ? `<span class="pre-line">${esc(f.msg)}</span>` : '']])];
+    case 'phone': return ['Phone call', kvl([['Number', f.tel ? `<a href="tel:${esc(f.tel.replace(/[^\d+]/g, ''))}">${esc(f.tel)}</a>` : esc(c.data.replace(/^tel:/, ''))]])];
+    case 'geo': {
+      const [lat, lng] = c.data.replace(/^geo:/, '').split(',');
+      return ['Location', kvl([['Latitude', esc(lat)], ['Longitude', esc(lng)],
+        ['Map', `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(lat + ',' + lng)}" target="_blank" rel="noopener">Open in Google Maps</a>`]])];
+    }
+    case 'vcard': return ['Contact', kvl(contactRows(f))];
+    default: return ['Content', pre(c.data)];
+  }
+}
+
+function detailShell(kind, type, c, { badges = '', meta = [], actions = '', edit = '', below = '' }) {
+  const explain = (TYPE_EXPLAIN[kind] || {})[type] || '';
+  const [detailsTitle, detailsHtml] = typeDetails(kind, type, c);
+  return `
+    <header class="dhead">
+      <span class="type-hero tb-${esc(type)}">${typeIcon(type, 30)}</span>
+      <div class="dtitle">
+        <p class="eyebrow">${kind === 'dynamic' ? 'Dynamic' : 'Static'} QR code · ${esc(typeLabel(type))}</p>
+        <h1>${esc(c.name)}</h1>
+        <div class="badges">${kindBadge(kind)}${typeBadge(type)}${badges}</div>
+      </div>
+    </header>
+    <div class="dgrid">
+      <div class="panel dqr">
+        <div class="dqr-img"><img src="${qrUrl(c.data, styleOf(c), 'png', 480)}" alt="QR code for ${esc(c.name)}" /></div>
+        <div class="row dl">
+          <button class="btn primary" data-dl="png">PNG</button><button class="btn" data-dl="svg">SVG</button>
+          <button class="btn" data-dl="pdf">PDF</button><button class="btn" data-dl="eps">EPS</button>
+        </div>
+        ${actions ? `<div class="row">${actions}</div>` : ''}
+      </div>
+      <div class="panel dinfo">
+        <h2>QR code type</h2>
+        <div class="typebox tb-${esc(type)}">
+          <span class="ic">${typeIcon(type, 22)}</span>
+          <div><b>${kind === 'dynamic' ? 'Dynamic' : 'Static'} · ${esc(typeLabel(type))}</b>
+            <p>${esc(explain + (kind === 'static' ? STATIC_NOTE : ''))}</p></div>
+        </div>
+        <h2>${esc(detailsTitle)}</h2>
+        ${detailsHtml}
+        <details class="raw"><summary>${kind === 'dynamic' ? 'Encoded in the QR (short link)' : 'Encoded in the QR'}</summary><pre class="payload">${esc(c.data)}</pre></details>
+        ${kvl(meta)}
+        ${edit}
+      </div>
+    </div>
+    ${below}`;
+}
+
+async function openDetail(kind, id) {
+  const body = $('#detail-body');
+  body.innerHTML = '<p class="muted">Loading…</p>';
+  let c;
+  try { c = await api(kind === 'dynamic' ? `/dynamic/${id}?days=30` : `/static/${id}`); }
+  catch (e) {
+    body.innerHTML = `<div class="empty">This QR code wasn't found. It may have been deleted.<br /><a href="#dashboard">Back to all QR codes</a></div>`;
+    return;
+  }
+  if (location.hash !== `#qr/${kind === 'dynamic' ? 'd' : 's'}/${id}`) return; // navigated away meanwhile
+  if (kind === 'dynamic') renderDynamicDetail({ ...c, data: c.shortUrl });
+  else renderStaticDetail(c);
+  $$('[data-dl]', body).forEach((b) => b.addEventListener('click', () => downloadCode(c.kind === 'static' ? c.data : c.shortUrl, styleOf(c), b.dataset.dl, c.name).catch((e) => toast(e.message))));
+  $$('[data-reveal]', body).forEach((b) => b.addEventListener('click', () => {
+    const sEl = b.previousElementSibling, shown = b.textContent === 'Hide';
+    sEl.textContent = shown ? '••••••••' : sEl.dataset.secret; b.textContent = shown ? 'Show' : 'Hide';
+  }));
+}
+
+function renderStaticDetail(c) {
+  const body = $('#detail-body');
+  body.innerHTML = detailShell('static', c.contentType, c, {
+    meta: [['Created', esc(c.createdAt) + ' UTC'], ['Last updated', esc(c.updatedAt) + ' UTC'], ['Downloads', String(c.downloads)],
+      ['Centre logo', c.hasLogo ? 'Yes' : '']],
+    edit: `<form class="fields" id="edit-form">
+        <label>Name<input name="name" value="${esc(c.name)}" required maxlength="120" /></label>
+        <p class="error" id="edit-error"></p>
+        <div class="row"><button class="btn primary" type="submit">Save name</button>
+          <button class="btn" type="button" data-edit>Edit content &amp; design</button>
+          <button class="btn danger" type="button" data-delete>Delete</button></div>
+        <p class="muted small" style="margin:0">Editing a static code creates a new image: reprint it after changing the content.</p>
+      </form>`,
+  });
+  $('[data-edit]', body).addEventListener('click', () => editStatic(c));
+  $('[data-delete]', body).addEventListener('click', async () => {
+    if (!confirm(`Remove "${c.name}" from the dashboard? Printed copies keep working; static codes don't depend on the server.`)) return;
+    try { await api(`/static/${c.id}`, { method: 'DELETE' }); toast('Deleted'); if (staticEditId === c.id) staticEditId = null; go('#dashboard'); }
+    catch (e) { toast(e.message); }
+  });
+  $('#edit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try { await api(`/static/${c.id}`, { method: 'PATCH', body: { name: readForm(e.target).name } }); toast('Saved'); openDetail('static', c.id); }
+    catch (err) { $('#edit-error').textContent = err.message; }
+  });
+}
+
+function renderDynamicDetail(d) {
+  const s = d.stats;
+  const body = $('#detail-body');
+  body.innerHTML = detailShell('dynamic', d.type, d, {
+    badges: `<span class="badge ${d.active ? '' : 'off'}">${d.active ? 'Active' : 'Paused'}</span>`,
+    actions: `<button class="btn sm" data-act="copy">Copy link</button>
+      <button class="btn sm" data-act="toggle">${d.active ? 'Pause' : 'Resume'}</button>
+      ${d.type === 'vcard' ? `<a class="btn sm" href="${esc(d.shortUrl)}" target="_blank" rel="noopener">View card page</a>` : ''}`,
+    meta: [['Created', esc(d.createdAt) + ' UTC'], ['Total scans', `<b>${d.totalScans}</b> (${d.uniqueScans} unique)`],
+      ['Last scan', d.lastScan ? esc(d.lastScan) + ' UTC' : '—']],
+    edit: `<form class="fields" id="edit-form">
+        <label>Name<input name="name" value="${esc(d.name)}" required maxlength="120" /></label>
+        ${d.type === 'vcard' ? '' : `<label>Destination URL <span class="muted">— change it any time, the printed QR stays the same</span>
+          <input name="targetUrl" value="${esc(d.targetUrl)}" required /></label>`}
+        <p class="error" id="edit-error"></p>
+        <div class="row"><button class="btn primary" type="submit">Save changes</button>
+          ${d.type === 'vcard' ? '<button class="btn" type="button" data-act="editvc">Edit vCard details</button>' : ''}
+          <button class="btn danger" type="button" data-act="delete">Delete</button></div>
+      </form>`,
+    below: `<div class="panel dstats">
+      <h2>Scans · last 30 days</h2>
+      ${barChart(s.series)}
+      <div class="breakdowns">${breakdown('Device', s.devices)}${breakdown('OS', s.os)}${breakdown('Browser', s.browsers)}</div>
+      <h3 class="sec">Location</h3>
+      ${d.geo.enabled ? '' : `<p class="muted small geo-note">${d.geo.error ? esc(d.geo.error) + '. ' : 'Location lookup is getting ready (the location database is downloading). '}Scans are still counted; their location shows as Unknown.</p>`}
+      <div class="breakdowns">${breakdown('Country', s.countries)}${breakdown('Region / State', s.regions)}${breakdown('City', s.cities)}</div>
+      <p class="muted small" style="margin-top:4px">Approximate location from the scanner's IP address (city-level, not GPS). IP addresses are not stored.
+        <a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a></p>
+      <h3>Recent scans</h3>
+      ${s.recent.length ? `<table><tr><th>Time (UTC)</th><th>Location</th><th>Device</th><th>OS</th></tr>
+        ${s.recent.map((r) => `<tr><td>${esc(r.scanned_at)}</td><td>${flag(r.country)}${esc(r.location)}</td><td>${esc(r.device)}</td><td>${esc(r.os)}</td></tr>`).join('')}</table>
+        <p><a href="/api/dynamic/${d.id}/scans.csv">Export all scans (CSV)</a></p>` : '<p class="muted small">No scans yet. Scan the code with your phone to test it.</p>'}
+      ${d.type === 'vcard' ? '' : `<h3>Destination history</h3>
+      <table>${d.history.map((h) => `<tr><td class="muted" style="white-space:nowrap">${esc(h.changed_at)}</td><td style="word-break:break-all">${esc(h.target_url)}</td></tr>`).join('')}</table>`}
+    </div>`,
+  });
+  $$('[data-act]', body).forEach((b) => b.addEventListener('click', () => codeAction(b.dataset.act, d)));
+  $('#edit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = readForm(e.target);
+    const payload = { name: f.name };
+    if (d.type !== 'vcard') {
+      payload.targetUrl = f.targetUrl.trim();
+      if (payload.targetUrl && !/^https?:\/\//i.test(payload.targetUrl)) payload.targetUrl = 'https://' + payload.targetUrl;
+    }
+    try { await api(`/dynamic/${d.id}`, { method: 'PATCH', body: payload }); toast('Saved'); openDetail('dynamic', d.id); }
+    catch (err) { $('#edit-error').textContent = err.message; }
+  });
+}
 
 function barChart(series) {
   const W = 520, H = 140, pad = 18, max = Math.max(1, ...series.map((d) => d.scans));
@@ -426,85 +784,6 @@ function breakdown(title, rows) {
   return `<div><h3>${title}</h3>${rows.length ? rows.map((r) => `
     <div class="bd-item"><span>${flag(r.code)}${esc(r.label)}</span><span class="muted">${Math.round((r.count / total) * 100)}%</span>
     <span class="track"><i style="width:${(r.count / total) * 100}%"></i></span></div>`).join('') : '<p class="muted small">No data yet</p>'}</div>`;
-}
-
-async function openDrawer(id) {
-  let d;
-  try { d = await api(`/dynamic/${id}?days=30`); } catch (e) { return toast(e.message); }
-  const s = d.stats;
-  $('#drawer-body').innerHTML = `
-    <div class="drawer-head">
-      <div><h2>${esc(d.name)}</h2><span class="badge ${d.active ? '' : 'off'}">${d.active ? 'Active' : 'Paused'}</span></div>
-      <button class="btn sm" data-close>Close</button>
-    </div>
-    <div class="qr-big">
-      <img src="${qrUrl(d.shortUrl, styleOf(d), 'png', 320)}" alt="QR code" />
-      <div class="kv">
-        <span class="muted">Short link</span><code>${esc(d.shortUrl)}</code>
-        <span class="muted">Created</span><span>${esc(d.createdAt)} UTC</span>
-        <div class="row" style="margin-top:6px">
-          <button class="btn sm" data-act="copy">Copy</button>
-          <button class="btn sm" data-act="png">PNG</button>
-          <button class="btn sm" data-act="svg">SVG</button>
-          <button class="btn sm" data-act="eps">EPS</button>
-          <button class="btn sm" data-act="pdf">PDF</button>
-          <button class="btn sm" data-act="toggle">${d.active ? 'Pause' : 'Resume'}</button>
-        </div>
-      </div>
-    </div>
-
-    <form class="fields" id="edit-form">
-      <label>Name<input name="name" value="${esc(d.name)}" required maxlength="120" /></label>
-      ${d.type === 'vcard'
-        ? `<p class="muted small" style="margin:0">Contact card for <b>${esc(VCard.fullName(d.vcard))}</b>. Edit the details any time; the printed QR stays the same.
-             <a href="${esc(d.shortUrl)}" target="_blank" rel="noopener">View card page</a></p>`
-        : `<label>Destination URL <span class="muted">— change it any time, the printed QR stays the same</span>
-        <input name="targetUrl" value="${esc(d.targetUrl)}" required /></label>`}
-      <p class="error" id="edit-error"></p>
-      <div class="row"><button class="btn primary" type="submit">Save changes</button>
-        ${d.type === 'vcard' ? '<button class="btn" type="button" data-act="editvc">Edit vCard details</button>' : ''}
-        <button class="btn danger" type="button" data-act="delete">Delete</button></div>
-    </form>
-
-    <h3>Scans · last 30 days</h3>
-    <div class="row" style="gap:24px;margin-bottom:8px">
-      <div><b style="font-size:22px">${d.totalScans}</b> <span class="muted small">total</span></div>
-      <div><b style="font-size:22px">${d.uniqueScans}</b> <span class="muted small">unique</span></div>
-      <div><span class="muted small">Last scan: ${d.lastScan ? esc(d.lastScan) + ' UTC' : '—'}</span></div>
-    </div>
-    ${barChart(s.series)}
-    <div class="breakdowns">${breakdown('Device', s.devices)}${breakdown('OS', s.os)}${breakdown('Browser', s.browsers)}</div>
-
-    <h3 class="sec">Location</h3>
-    ${d.geo.enabled ? '' : `<p class="muted small geo-note">${d.geo.error ? esc(d.geo.error) + '. ' : 'Location lookup is getting ready (the location database is downloading). '}Scans are still counted; their location shows as Unknown.</p>`}
-    <div class="breakdowns">${breakdown('Country', s.countries)}${breakdown('Region / State', s.regions)}${breakdown('City', s.cities)}</div>
-    <p class="muted small" style="margin-top:4px">Approximate location from the scanner's IP address (city-level, not GPS). IP addresses are not stored.
-      <a href="https://db-ip.com" target="_blank" rel="noopener">IP Geolocation by DB-IP</a></p>
-
-    <h3>Recent scans</h3>
-    ${s.recent.length ? `<table><tr><th>Time (UTC)</th><th>Location</th><th>Device</th><th>OS</th></tr>
-      ${s.recent.map((r) => `<tr><td>${esc(r.scanned_at)}</td><td>${flag(r.country)}${esc(r.location)}</td><td>${esc(r.device)}</td><td>${esc(r.os)}</td></tr>`).join('')}</table>
-      <p><a href="/api/dynamic/${d.id}/scans.csv">Export all scans (CSV)</a></p>` : '<p class="muted small">No scans yet. Scan the code with your phone to test it.</p>'}
-
-    ${d.type === 'vcard' ? '' : `<h3>Destination history</h3>
-    <table>${d.history.map((h) => `<tr><td class="muted" style="white-space:nowrap">${esc(h.changed_at)}</td><td style="word-break:break-all">${esc(h.target_url)}</td></tr>`).join('')}</table>`}`;
-
-  $('#drawer').hidden = $('#drawer-backdrop').hidden = false;
-  $('[data-close]', $('#drawer')).addEventListener('click', closeDrawer);
-  $$('[data-act]', $('#drawer')).forEach((b) => b.addEventListener('click', () => codeAction(b.dataset.act, d)));
-  $('#edit-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const f = readForm(e.target);
-    const body = { name: f.name };
-    if (d.type !== 'vcard') {
-      body.targetUrl = f.targetUrl.trim();
-      if (body.targetUrl && !/^https?:\/\//i.test(body.targetUrl)) body.targetUrl = 'https://' + body.targetUrl;
-    }
-    try {
-      await api(`/dynamic/${d.id}`, { method: 'PATCH', body });
-      toast('Saved'); await loadDynamic(); openDrawer(d.id);
-    } catch (err) { $('#edit-error').textContent = err.message; }
-  });
 }
 
 // ---------- vCARD ----------
@@ -702,7 +981,7 @@ const updateVcard = debounce(async () => {
   if (isStatic) {
     vcActions(`<button type="button" class="btn primary" data-vc="png">Download PNG</button>
       <button type="button" class="btn" data-vc="svg">SVG</button><button type="button" class="btn" data-vc="eps">EPS</button><button type="button" class="btn" data-vc="pdf">PDF</button>
-      <button type="button" class="btn" data-vc="vcf">.vcf file</button>`);
+      <button type="button" class="btn" data-vc="vcf">.vcf file</button><button type="button" class="btn" data-vc="savestatic">${vcStaticEditId ? 'Save changes' : 'Save to dashboard'}</button>`);
   } else if (vcEditId) {
     vcActions(`<button type="button" class="btn primary" data-vc="save">Save changes</button>
       <button type="button" class="btn" data-vc="png">PNG</button><button type="button" class="btn" data-vc="svg">SVG</button>
@@ -723,12 +1002,16 @@ async function vcAction(act) {
       if (errors.length) { vcSubmitted = true; updateVcard(); $('#vc-error').scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
     }
     const style = vcDesign.get();
-    const qrData = $('#vc-static').checked && !vcEditId ? text : vcShortUrl;
-    if (act === 'png') return download(URL.createObjectURL(await renderPng(qrData, { ...style, size: 1024 })), `${vcFileName()}.png`);
-    if (act === 'svg') return download(URL.createObjectURL(await renderSvg(qrData, style)), `${vcFileName()}.svg`);
-    if (act === 'eps') return download(URL.createObjectURL(await renderEps(qrData, { ...style, size: 1024 })), `${vcFileName()}.eps`);
-    if (act === 'pdf') return download(URL.createObjectURL(await renderPdf(qrData, { ...style, size: 1024 })), `${vcFileName()}.pdf`);
+    const isStatic = $('#vc-static').checked && !vcEditId;
+    const qrData = isStatic ? text : vcShortUrl;
+    const render = { png: renderPng, svg: renderSvg, eps: renderEps, pdf: renderPdf }[act];
+    if (render) {
+      download(URL.createObjectURL(await render(qrData, { ...style, size: 1024 })), `${vcFileName()}.${act}`);
+      if (isStatic) saveStaticVcard({ download: true }).catch(() => {}); // keep static vCards on the dashboard
+      return;
+    }
     if (act === 'vcf') return download(URL.createObjectURL(new Blob([VCard.build(card)], { type: 'text/vcard' })), `${vcFileName()}.vcf`);
+    if (act === 'savestatic') { await saveStaticVcard(); toast('Saved to dashboard'); return; }
     const { dark, light, ecc, margin } = style;
     const body = { type: 'vcard', name: vcForm.elements.qrName.value.trim(), vcard: readVcard(), style: { dark, light, ecc, margin } };
     if (act === 'create') {
@@ -748,6 +1031,29 @@ async function vcAction(act) {
   } catch (err) { $('#vc-error').textContent = err.message; }
 }
 
+let vcStaticEditId = null;
+async function saveStaticVcard({ download: dl = false } = {}) {
+  const { card, text } = vcState;
+  const { dark, light, ecc, margin } = vcDesign.get();
+  const r = await api('/static', { method: 'POST', body: {
+    id: vcStaticEditId || undefined, name: vcForm.elements.qrName.value.trim(), contentType: 'vcard',
+    payload: text, fields: card, style: { dark, light, ecc, margin }, download: dl,
+  } });
+  if (vcStaticEditId) vcStaticEditId = r.id;
+  $('#vc-qr-note').innerHTML += ` <span class="saved-note">✓ Saved to dashboard · <a href="#qr/s/${r.id}">View</a></span>`;
+  return r;
+}
+function editStaticVcard(c) {
+  vcEditId = null; vcShortUrl = ''; vcStaticEditId = c.id;
+  $('#vc-title').textContent = `Editing: ${c.name}`;
+  fillVcard(c.fields || {}, { name: c.name, style: c.style });
+  $('#vc-static').checked = true;
+  setVcPreview('qr');
+  go('#vcard');
+  updateVcard();
+  scrollTo({ top: 0 });
+}
+
 function fillVcard(card = {}, { name = '', style } = {}) {
   vcForm.reset();
   for (const k of ['firstName', 'lastName', 'company', 'jobTitle', 'birthday', 'address', 'about']) vcForm.elements[k].value = card[k] || '';
@@ -763,7 +1069,7 @@ function fillVcard(card = {}, { name = '', style } = {}) {
   setPhoto(card.photo || '');
 }
 function resetVcard() {
-  vcEditId = null; vcShortUrl = '';
+  vcEditId = null; vcShortUrl = ''; vcStaticEditId = null;
   $('#vc-title').textContent = 'vCard QR code';
   fillVcard();
   setVcPreview('card');
@@ -772,10 +1078,11 @@ async function editVcard(id) {
   try {
     const d = await api(`/dynamic/${id}`);
     vcEditId = d.id; vcShortUrl = d.shortUrl;
+    vcStaticEditId = null;
     $('#vc-static').checked = false;
     $('#vc-title').textContent = `Editing: ${d.name}`;
     fillVcard(d.vcard, { name: d.name, style: d.style });
-    $('.tab[data-view="vcard"]').click();
+    go('#vcard');
     scrollTo({ top: 0 });
   } catch (err) { toast(err.message); }
 }
@@ -783,9 +1090,7 @@ resetVcard();
 
 document.addEventListener('click', (e) => {
   const g = e.target.closest('[data-goto]'); if (!g) return;
-  e.preventDefault(); $(`.tab[data-view="${g.dataset.goto}"]`).click();
+  e.preventDefault(); go('#' + g.dataset.goto);
 });
-// deep link to tab
-function tabFromHash() { const t = $(`.tab[data-view="${location.hash.slice(1)}"]`); if (t && !t.classList.contains('active')) t.click(); }
-addEventListener('hashchange', tabFromHash);
-tabFromHash();
+addEventListener('hashchange', route);
+route();

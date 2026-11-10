@@ -437,8 +437,151 @@ api.get('/dynamic/:id/scans.csv', (req, res) => {
   res.type('text/csv').attachment(`${row.code}-scans.csv`).send(csv);
 });
 
+
+// ---------- static codes (saved for the dashboard) ----------
+const STATIC_TYPES = ['url', 'text', 'wifi', 'email', 'sms', 'phone', 'geo', 'vcard'];
+const LOGO = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/;
+
+function cleanFields(type, fields) {
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return {};
+  if (type === 'vcard') {
+    const { card } = VCard.normalize(fields);
+    delete card.photo; // static vCards don't carry the photo
+    return card;
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(fields).slice(0, 20)) {
+    if (!/^[a-zA-Z_]{1,20}$/.test(k)) continue;
+    if (typeof v === 'boolean') out[k] = v;
+    else if (typeof v === 'string' || typeof v === 'number') out[k] = String(v).slice(0, 3000);
+  }
+  return out;
+}
+
+function staticStyle(style) {
+  const out = cleanStyle(style);
+  // keep the centre logo so re-downloads from the dashboard match the original
+  if (style && typeof style.logo === 'string' && style.logo.length <= 400 * 1024 && LOGO.test(style.logo)) out.logo = style.logo;
+  return out;
+}
+
+// One readable line per code for lists.
+function staticSummary(type, f, payload) {
+  switch (type) {
+    case 'url': return payload;
+    case 'text': return String(f.text || payload).replace(/\s+/g, ' ').slice(0, 120);
+    case 'wifi': return `Network: ${f.ssid || '?'}${f.auth === 'nopass' ? ' (open)' : ''}`;
+    case 'email': return [f.to, f.subject].filter(Boolean).join(' · ');
+    case 'sms': return [f.tel, f.msg].filter(Boolean).join(' · ').slice(0, 120);
+    case 'phone': return f.tel || payload.replace(/^tel:/, '');
+    case 'geo': return payload.replace(/^geo:/, '').replace(',', ', ');
+    case 'vcard': return [VCard.fullName(f), f.company].filter(Boolean).join(' · ');
+    default: return payload.slice(0, 120);
+  }
+}
+
+function serializeStatic(row, { full = false } = {}) {
+  const fields = JSON.parse(row.fields || '{}');
+  const style = JSON.parse(row.style || '{}');
+  const hasLogo = !!style.logo;
+  if (!full) delete style.logo;
+  return {
+    kind: 'static',
+    id: row.id,
+    name: row.name,
+    contentType: row.content_type,
+    data: row.payload,
+    summary: staticSummary(row.content_type, fields, row.payload),
+    fields: full ? fields : undefined,
+    style,
+    hasLogo,
+    downloads: row.downloads,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const getStatic = db.prepare('SELECT * FROM static_codes WHERE id = ?');
+
+// Save a static code. With `id`, updates that code (editing); otherwise an identical
+// code (same type + content) is updated instead of duplicated.
+api.post('/static', (req, res) => {
+  const b = req.body || {};
+  const type = String(b.contentType || '');
+  if (!STATIC_TYPES.includes(type)) return res.status(400).json({ error: 'Unknown QR content type' });
+  const payload = String(b.payload || '');
+  if (!payload) return res.status(400).json({ error: 'Nothing to save: the QR content is empty' });
+  if (payload.length > 2900) return res.status(400).json({ error: 'Content too long for a QR code' });
+  const fields = cleanFields(type, b.fields);
+  const style = staticStyle(b.style);
+  const hash = crypto.createHash('sha256').update(type + '\n' + payload).digest('hex');
+  const name = String(b.name || '').trim().slice(0, 120)
+    || (type === 'vcard' ? VCard.fullName(fields) : staticSummary(type, fields, payload)).slice(0, 60) || 'Static QR';
+  const countDownload = b.download ? 1 : 0;
+
+  let row = b.id ? getStatic.get(Number(b.id)) : db.prepare('SELECT * FROM static_codes WHERE content_hash = ? ORDER BY id DESC LIMIT 1').get(hash);
+  if (b.id && !row) return res.status(404).json({ error: 'Not found' });
+  if (row) {
+    db.prepare(`UPDATE static_codes SET name = ?, content_type = ?, payload = ?, fields = ?, style = ?, content_hash = ?,
+      downloads = downloads + ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(String(b.name || '').trim() ? name : row.name, type, payload, JSON.stringify(fields), JSON.stringify(style), hash, countDownload, row.id);
+    return res.json({ ...serializeStatic(getStatic.get(row.id)), created: false });
+  }
+  const info = db.prepare(`INSERT INTO static_codes (name, content_type, payload, fields, style, content_hash, downloads)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(name, type, payload, JSON.stringify(fields), JSON.stringify(style), hash, countDownload);
+  res.status(201).json({ ...serializeStatic(getStatic.get(info.lastInsertRowid)), created: true });
+});
+
+api.get('/static/:id', (req, res) => {
+  const row = getStatic.get(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  res.json(serializeStatic(row, { full: true }));
+});
+
+api.patch('/static/:id', (req, res) => {
+  const row = getStatic.get(Number(req.params.id));
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const name = String((req.body || {}).name || '').trim().slice(0, 120);
+  if (!name) return res.status(400).json({ error: 'Name cannot be empty' });
+  db.prepare("UPDATE static_codes SET name = ?, updated_at = datetime('now') WHERE id = ?").run(name, row.id);
+  res.json(serializeStatic(getStatic.get(row.id), { full: true }));
+});
+
+api.delete('/static/:id', (req, res) => {
+  const info = db.prepare('DELETE FROM static_codes WHERE id = ?').run(Number(req.params.id));
+  if (!info.changes) return res.status(404).json({ error: 'Not found' });
+  res.status(204).end();
+});
+
+// Every code, static and dynamic, for the dashboard.
+api.get('/codes', (req, res) => {
+  const dynamic = listStmt.all().map((r) => {
+    const d = serialize(r, req);
+    return {
+      kind: 'dynamic',
+      id: d.id,
+      name: d.name,
+      contentType: d.type, // 'url' | 'vcard'
+      data: d.shortUrl,
+      shortUrl: d.shortUrl,
+      summary: d.type === 'vcard'
+        ? [VCard.fullName(d.vcard), d.vcard.company].filter(Boolean).join(' · ')
+        : d.targetUrl,
+      style: d.style,
+      active: d.active,
+      totalScans: d.totalScans,
+      lastScan: d.lastScan,
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+    };
+  });
+  const statics = db.prepare('SELECT * FROM static_codes ORDER BY id DESC').all().map((r) => serializeStatic(r));
+  res.json([...dynamic, ...statics].sort((a, b) => (b.createdAt > a.createdAt ? 1 : b.createdAt < a.createdAt ? -1 : 0)));
+});
+
 api.get('/overview', (req, res) => {
   res.json({
+    staticCodes: db.prepare('SELECT COUNT(*) AS n FROM static_codes').get().n,
     dynamicCodes: db.prepare('SELECT COUNT(*) AS n FROM dynamic_codes').get().n,
     activeCodes: db.prepare('SELECT COUNT(*) AS n FROM dynamic_codes WHERE active = 1').get().n,
     totalScans: db.prepare('SELECT COUNT(*) AS n FROM scans').get().n,

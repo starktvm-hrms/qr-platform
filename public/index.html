@@ -13,15 +13,56 @@
       <span>QR Platform</span>
     </div>
     <nav class="tabs" role="tablist">
-      <button class="tab active" data-view="static" role="tab">Static QR</button>
+      <button class="tab active" data-view="dashboard" role="tab">Dashboard</button>
+      <button class="tab" data-view="static" role="tab">Static QR</button>
       <button class="tab" data-view="vcard" role="tab">vCard</button>
       <button class="tab" data-view="dynamic" role="tab">Dynamic QR</button>
     </nav>
   </header>
 
   <main>
+    <!-- ================= DASHBOARD ================= -->
+    <section id="view-dashboard" class="view active">
+      <div class="intro dash-intro">
+        <div>
+          <h1>All QR codes</h1>
+          <p>Every static and dynamic code you've created. Open one to see its details, type and stats.</p>
+        </div>
+        <div class="row">
+          <a class="btn" href="#static">+ Static QR</a>
+          <a class="btn" href="#vcard">+ vCard</a>
+          <a class="btn primary" href="#dynamic">+ Dynamic QR</a>
+        </div>
+      </div>
+      <div class="stats" id="dash-stats"></div>
+      <div class="panel">
+        <div class="dash-tools">
+          <div class="seg" id="dash-kind">
+            <button type="button" class="active" data-kind="all">All</button>
+            <button type="button" data-kind="dynamic">Dynamic</button>
+            <button type="button" data-kind="static">Static</button>
+          </div>
+          <input type="search" id="dash-search" placeholder="Search name or content…" />
+          <select id="dash-sort" aria-label="Sort">
+            <option value="new">Newest first</option>
+            <option value="old">Oldest first</option>
+            <option value="name">Name A–Z</option>
+            <option value="scans">Most scanned</option>
+          </select>
+        </div>
+        <div class="chips" id="dash-types"></div>
+        <div class="dash-grid" id="dash-grid"></div>
+      </div>
+    </section>
+
+    <!-- ================= DETAIL (one QR code) ================= -->
+    <section id="view-detail" class="view">
+      <a class="back" href="#dashboard">← All QR codes</a>
+      <div id="detail-body"></div>
+    </section>
+
     <!-- ================= STATIC ================= -->
-    <section id="view-static" class="view active">
+    <section id="view-static" class="view">
       <div class="intro">
         <h1>Static QR codes</h1>
         <p>Content is encoded directly into the image. Works forever, offline, with no tracking &mdash; but can't be changed after printing.</p>
@@ -49,6 +90,8 @@
           <h2>Preview</h2>
           <div class="preview"><img id="static-preview" alt="QR preview" /><p class="muted" id="static-empty">Fill in the content to see your QR code</p></div>
           <p class="payload" id="static-payload"></p>
+          <label class="static-name">QR name <span class="muted">(optional, shown on the dashboard)</span>
+            <input id="static-name" maxlength="120" placeholder="e.g. Office Wi-Fi" /></label>
           <div class="row">
             <button class="btn primary" id="static-png">Download PNG</button>
             <button class="btn" id="static-svg">SVG</button>
@@ -56,6 +99,11 @@
             <button class="btn" id="static-pdf">PDF</button>
           </div>
           <p class="muted small" id="static-warn"></p>
+          <div class="save-row">
+            <button class="btn" id="static-save" type="button">Save to dashboard</button>
+            <span class="muted small" id="static-saved"></span>
+          </div>
+          <p class="muted small" style="margin:6px 0 0">Downloads are saved to the dashboard automatically.</p>
         </div>
       </div>
     </section>
@@ -182,11 +230,6 @@
     </section>
   </main>
 
-  <!-- detail drawer -->
-  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
-  <aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog">
-    <div id="drawer-body"></div>
-  </aside>
 
   <div class="toast" id="toast" hidden></div>
 

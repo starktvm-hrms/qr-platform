@@ -36,6 +36,22 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_scans_code ON scans(code_id, scanned_at);
 
+  -- Static codes are generated in the browser; they're saved here so the dashboard can list them.
+  -- content_hash dedupes re-downloads of the same code.
+  CREATE TABLE IF NOT EXISTS static_codes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT    NOT NULL,
+    content_type  TEXT    NOT NULL,
+    payload       TEXT    NOT NULL,
+    fields        TEXT    NOT NULL DEFAULT '{}',
+    style         TEXT    NOT NULL DEFAULT '{}',
+    content_hash  TEXT    NOT NULL,
+    downloads     INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_static_hash ON static_codes(content_hash);
+
   CREATE TABLE IF NOT EXISTS url_history (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     code_id     INTEGER NOT NULL REFERENCES dynamic_codes(id) ON DELETE CASCADE,

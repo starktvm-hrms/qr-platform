@@ -11,6 +11,8 @@ A self-hosted platform for creating **static** and **dynamic** QR codes.
 
 ## Features
 
+- **Dashboard of all QR codes:** every static and dynamic code in one place, with totals, filters (static/dynamic and type), search, sorting and quick downloads. Static codes are saved automatically when you download them (or with **Save to dashboard**); re-downloading the same code updates it instead of duplicating it.
+- **A page per QR code** (`#qr/d/<id>` dynamic, `#qr/s/<id>` static) showing its type (for example *Static · Wi-Fi* or *Dynamic · vCard*), what that type does, and the details for that type: Wi-Fi network (password hidden until shown), map location, contact, link or destination. Dynamic codes also show their full scan stats.
 - **Static types:** URL, plain text, Wi‑Fi, email, SMS, phone, geo location
 - **vCard QR codes:** first and last name, company, job title, photo, about text, date of birth, up to 5 phones (type and country code), emails and websites, address, social profiles (LinkedIn, Instagram, Facebook, X, YouTube), and card color.
   - **5 card templates:** Classic, Banner, Bold, Bubbles and Cover, all tinted with your card color. You can switch templates any time without changing the printed QR.
@@ -58,6 +60,9 @@ All under `/api` (Basic auth if `ADMIN_PASSWORD` is set).
 - `PATCH /api/dynamic/:id` `{ name?, targetUrl?, active?, style? }`: update
 - `DELETE /api/dynamic/:id`
 - `GET /api/dynamic/:id/scans.csv`: export scans
+- `GET /api/codes`: every code, static and dynamic, with its kind, type and a short summary
+- `POST /api/static` `{ contentType, payload, fields?, style?, name?, id? }`: save a static code (identical content updates the existing one)
+- `GET /api/static/:id`, `PATCH /api/static/:id` `{ name }`, `DELETE /api/static/:id`
 - `GET /api/overview`: totals
 - `GET /r/:code`: public redirect (logs the scan, `302` to the destination; `410` if paused)
 - `GET /r/:code/vcf`: public `.vcf` download for vCard codes
