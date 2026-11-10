@@ -131,7 +131,7 @@
     if (c.company) L.push('ORG:' + vesc(c.company));
     if (c.jobTitle) L.push('TITLE:' + vesc(c.jobTitle));
     (c.phones || []).forEach(function (p) { L.push('TEL;TYPE=' + (PHONE_TYPES[p.type] || PHONE_TYPES.main).vcf + ':' + p.number); });
-    (c.emails || []).forEach(function (e, i) { L.push('EMAIL;TYPE=INTERNET' + (i === 0 ? ',PREF' : '') + ':' + e); });
+    (c.emails || []).forEach(function (e) { L.push('EMAIL;TYPE=WORK:' + e); });
     (c.websites || []).forEach(function (w) { L.push('URL:' + w); });
     if (c.address) L.push('ADR;TYPE=WORK:;;' + vesc(c.address) + ';;;;');
     if (c.birthday) L.push('BDAY:' + c.birthday);
@@ -201,35 +201,6 @@
   function link(href, ext) { return href ? ' href="' + h(href) + '"' + (ext ? ' target="_blank" rel="noopener"' : '') : ''; }
 
 
-  // ---------------- Android "Add contact" intent ----------------
-  // Chrome / Samsung Internet open the phone's own Add-contact screen, pre-filled, from an
-  // intent: link (ContactsContract.Intents.Insert extras). That screen can't take a photo,
-  // websites or birthday, so those go into Notes. browser_fallback_url is used by browsers
-  // that can't handle the intent.
-  var ANDROID_PHONE_TYPE = { main: 12, mobile: 2, work: 3, home: 1, fax: 4 };
-  function androidIntent(c, fallbackUrl) {
-    var ex = [], enc = encodeURIComponent;
-    function put(kind, key, val) { if (val !== '' && val != null) ex.push(kind + '.' + key + '=' + enc(String(val))); }
-    put('S', 'name', fullName(c));
-    put('S', 'company', c.company);
-    put('S', 'job_title', c.jobTitle);
-    put('S', 'postal', c.address);
-    ['', 'secondary_', 'tertiary_'].forEach(function (pre, i) {
-      var p = (c.phones || [])[i];
-      if (p) { put('S', pre + 'phone', p.number); put('i', pre + 'phone_type', ANDROID_PHONE_TYPE[p.type] || 12); }
-      put('S', pre + 'email', (c.emails || [])[i]);
-    });
-    var notes = [];
-    if (c.about) notes.push(c.about);
-    (c.websites || []).forEach(function (w) { notes.push('Website: ' + w); });
-    Object.keys(SOCIALS).forEach(function (k) { if (c.socials && c.socials[k]) notes.push(SOCIALS[k].label + ': ' + c.socials[k]); });
-    if (c.birthday) notes.push('Birthday: ' + prettyDate(c.birthday));
-    (c.phones || []).slice(3).forEach(function (p) { notes.push('Phone: ' + p.number); });
-    (c.emails || []).slice(3).forEach(function (e) { notes.push('Email: ' + e); });
-    put('S', 'notes', notes.join('\n'));
-    put('S', 'browser_fallback_url', fallbackUrl);
-    return 'intent:#Intent;action=android.intent.action.INSERT;type=vnd.android.cursor.dir/contact;' + ex.join(';') + ';end';
-  }
 
   // Everything the templates need, computed once.
   function model(c, vcfHref, opts) {
@@ -270,9 +241,9 @@
       }).join('') + '</nav>' : '';
     };
     m.aboutHtml = function (cls) { return m.about ? '<p class="about ' + (cls || '') + '">' + h(m.about) + '</p>' : ''; };
-    m.saveHtml = '<a class="save"' + link(opts.addHref || vcfHref) + '>' + icon('save') + 'Add to contacts</a>';
-    // On Android the button opens the native screen (no photo), so also offer the full file
-    m.altHtml = opts.addHref ? '<p class="alt"><a' + link(vcfHref) + '>Download contact file (.vcf) with photo</a></p>' : '';
+    // No `download` attribute: iOS Safari then shows its native contact sheet for the inline vCard,
+    // and Android browsers fetch the file and hand it to the Contacts app.
+    m.saveHtml = '<a class="save"' + link(vcfHref) + '>' + icon('save') + 'Add to contacts</a>';
     return m;
   }
 
@@ -284,8 +255,7 @@
     '.avatar{display:block;border-radius:50%;object-fit:cover;background:#fff}.ph{display:grid;place-items:center;font-weight:700}' +
     '.soc{display:flex;justify-content:center;gap:12px;flex-wrap:wrap}.soc a{width:44px;height:44px;border-radius:50%;display:grid;place-items:center}' +
     '.save{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);width:min(448px,calc(100% - 32px));display:flex;align-items:center;justify-content:center;gap:8px;padding:15px;border-radius:14px;font-weight:700;box-shadow:0 6px 20px rgba(16,24,40,.25);z-index:5}' +
-    '.row b{font-weight:500;overflow-wrap:anywhere;display:block}' +
-    '.alt{position:relative;text-align:center;font-size:13px;margin:14px 16px 0;width:100%}.alt a{text-decoration:underline;opacity:.75}';
+    '.row b{font-weight:500;overflow-wrap:anywhere;display:block}';
 
   // Each template returns [css, bodyHtml].
   var RENDER = {
@@ -306,7 +276,7 @@
         '<main class="rows">' + m.rows.map(function (r) {
           var inner = icon(r.icon) + '<div><b>' + h(r.value) + '</b><span>' + h(r.label) + '</span></div>';
           return r.href ? '<a class="row"' + link(r.href, r.ext) + '>' + inner + '</a>' : '<div class="row">' + inner + '</div>';
-        }).join('') + '</main>' + m.socialHtml() + m.altHtml;
+        }).join('') + '</main>' + m.socialHtml();
       return [css, body];
     },
 
@@ -326,7 +296,7 @@
         '</section><main class="rows">' + m.rows.map(function (r) {
           var inner = '<span class="ic">' + icon(r.icon) + '</span><div><span>' + h(r.label) + '</span><b>' + h(r.value) + '</b></div>';
           return r.href ? '<a class="row"' + link(r.href, r.ext) + '>' + inner + '</a>' : '<div class="row">' + inner + '</div>';
-        }).join('') + '</main>' + m.socialHtml() + m.altHtml;
+        }).join('') + '</main>' + m.socialHtml();
       return [css, body];
     },
 
@@ -348,7 +318,7 @@
           var inner = '<span>' + h(r.label) + '</span><b>' + h(r.value) + '</b>';
           return r.href ? '<a class="box"' + link(r.href, r.ext) + '>' + inner + '</a>' : '<div class="box">' + inner + '</div>';
         }).join('') + '</main>' +
-        '<footer class="foot"><h2>Let\'s connect</h2>' + m.socialHtml() + m.altHtml + '</footer>';
+        '<footer class="foot"><h2>Let\'s connect</h2>' + m.socialHtml() + '</footer>';
       return [css, body];
     },
 
@@ -377,7 +347,7 @@
         '<main class="rows">' + m.rows.map(function (r) {
           var inner = '<span class="ic">' + icon(r.icon) + '</span><b>' + h(r.value) + '</b>';
           return r.href ? '<a class="row" title="' + h(r.label) + '"' + link(r.href, r.ext) + '>' + inner + '</a>' : '<div class="row" title="' + h(r.label) + '">' + inner + '</div>';
-        }).join('') + '</main>' + m.socialHtml() + m.altHtml;
+        }).join('') + '</main>' + m.socialHtml();
       return [css, body];
     },
 
@@ -401,7 +371,7 @@
         m.rows.map(function (r) {
           var inner = '<span class="ic">' + icon(r.icon, 18) + '</span><b>' + h(r.value) + '</b>';
           return r.href ? '<a class="row" title="' + h(r.label) + '"' + link(r.href, r.ext) + '>' + inner + '</a>' : '<div class="row" title="' + h(r.label) + '">' + inner + '</div>';
-        }).join('') + m.socialHtml() + m.altHtml + '</main>';
+        }).join('') + m.socialHtml() + '</main>';
       return [css, body];
     },
   };
@@ -417,7 +387,7 @@
       '<body><div class="wrap">' + out[1] + m.saveHtml + '</div></body></html>';
   }
 
-  var api = { androidIntent: androidIntent, PHONE_TYPES: PHONE_TYPES, TEMPLATES: TEMPLATES, SOCIALS: SOCIALS, icon: icon,
+  var api = { PHONE_TYPES: PHONE_TYPES, TEMPLATES: TEMPLATES, SOCIALS: SOCIALS, icon: icon,
     palette: function (hex) { return { c2: hueShift(hex, 38), tint: mix(hex, '#ffffff', 0.86) }; }, MAX_ITEMS: MAX_ITEMS, normalize: normalize, build: build, renderPage: renderPage, fullName: fullName };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.VCard = api;

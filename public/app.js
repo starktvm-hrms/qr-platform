@@ -551,7 +551,7 @@ function phoneRow(first, p = {}) {
   if (m) { cc = m[0]; num = num.slice(m[1].length).trim(); } else if (num.startsWith('+')) cc = '';
   return `<div class="phone-row" data-row="phone">
     <div class="fl"><select data-f="type">${Object.entries(VCard.PHONE_TYPES).map(([k, v]) =>
-      `<option value="${k}" ${k === (p.type || 'main') ? 'selected' : ''}>${v.label}</option>`).join('')}</select><span>Phone Type</span></div>
+      `<option value="${k}" ${k === (p.type || 'mobile') ? 'selected' : ''}>${v.label}</option>`).join('')}</select><span>Phone Type</span></div>
     <div class="fl num">
       <select class="cc" data-f="cc" aria-label="Country code">${COUNTRIES.map(([iso, code, flag]) =>
         `<option value="${iso}" ${iso === cc ? 'selected' : ''}>${flag} ${code}</option>`).join('')}

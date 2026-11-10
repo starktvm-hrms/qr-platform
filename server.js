@@ -146,7 +146,7 @@ app.get('/r/:code/vcf', (req, res) => {
   res.set('Cache-Control', 'no-store');
   const ua = req.get('user-agent') || '';
   const appleSafari = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && /Safari/.test(ua) && !/Chrome|Chromium|Edg|Firefox|OPR/.test(ua));
-  res.type('text/vcard; charset=utf-8');
+  res.type(/Android/i.test(ua) ? 'text/x-vcard; charset=utf-8' : 'text/vcard; charset=utf-8');
   if (appleSafari) res.set('Content-Disposition', `inline; filename="${file}.vcf"`);
   else res.attachment(`${file}.vcf`);
   res.send(VCard.build(card));
@@ -174,9 +174,7 @@ app.get('/r/:code', (req, res) => {
     res.set('X-Content-Type-Options', 'nosniff');
     const card = JSON.parse(row.payload || '{}');
     const vcf = `/r/${row.code}/vcf`;
-    // Android: open the phone's own Add-contact screen, falling back to the .vcf file
-    const addHref = /Android/i.test(ua) ? VCard.androidIntent(card, baseUrl(req) + vcf) : undefined;
-    return res.type('html').send(VCard.renderPage(card, vcf, { addHref }));
+    return res.type('html').send(VCard.renderPage(card, vcf));
   }
   res.redirect(302, row.target_url);
 });
