@@ -144,7 +144,12 @@ app.get('/r/:code/vcf', (req, res) => {
   const card = JSON.parse(row.payload || '{}');
   const file = VCard.fullName(card).replace(/[^\w .-]+/g, '').trim().replace(/\s+/g, '_') || 'contact';
   res.set('Cache-Control', 'no-store');
-  res.type('text/vcard; charset=utf-8').attachment(`${file}.vcf`).send(VCard.build(card));
+  const ua = req.get('user-agent') || '';
+  const appleSafari = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && /Safari/.test(ua) && !/Chrome|Chromium|Edg|Firefox|OPR/.test(ua));
+  res.type('text/vcard; charset=utf-8');
+  if (appleSafari) res.set('Content-Disposition', `inline; filename="${file}.vcf"`);
+  else res.attachment(`${file}.vcf`);
+  res.send(VCard.build(card));
 });
 
 app.get('/r/:code', (req, res) => {
@@ -167,7 +172,11 @@ app.get('/r/:code', (req, res) => {
     // Hosted contact card. No scripts at all, so lock it down with a strict CSP.
     res.set('Content-Security-Policy', "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     res.set('X-Content-Type-Options', 'nosniff');
-    return res.type('html').send(VCard.renderPage(JSON.parse(row.payload || '{}'), `/r/${row.code}/vcf`));
+    const card = JSON.parse(row.payload || '{}');
+    const vcf = `/r/${row.code}/vcf`;
+    // Android: open the phone's own Add-contact screen, falling back to the .vcf file
+    const addHref = /Android/i.test(ua) ? VCard.androidIntent(card, baseUrl(req) + vcf) : undefined;
+    return res.type('html').send(VCard.renderPage(card, vcf, { addHref }));
   }
   res.redirect(302, row.target_url);
 });
