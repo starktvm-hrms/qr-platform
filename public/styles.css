@@ -344,3 +344,8 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .slug-input input:invalid { color: var(--danger); }
 .aliases { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .aliases li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* tappable info button next to the Static QR Code checkbox */
+button.help { background: none; padding: 0; cursor: pointer; }
+button.help[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.static-help { margin: -6px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); line-height: 1.5; }

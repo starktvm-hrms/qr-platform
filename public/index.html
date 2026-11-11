@@ -168,8 +168,13 @@
 
           <label class="inline static-toggle">
             <input type="checkbox" id="vc-static" /> Static QR Code
-            <i class="help info" title="Static: the contact is stored inside the QR itself. Works offline, but can't be edited or tracked after printing, and the photo isn't included. Leave unticked for an editable, trackable contact card page.">i</i>
+            <button type="button" class="help info" id="vc-static-info" aria-expanded="false" aria-controls="vc-static-help" aria-label="What is a static QR code?">i</button>
           </label>
+          <p class="muted small static-help" id="vc-static-help" hidden>
+            <b>Unticked (recommended):</b> the QR opens a contact card page. You can edit it any time, it includes the photo, and scans are tracked.<br />
+            <b>Ticked:</b> the contact is stored inside the QR itself. It works offline, but it can't be edited or tracked after printing, and the photo isn't included.
+            While editing an existing card, ticking it makes a separate static copy; your dynamic QR isn't changed.
+          </p>
 
           <div class="fl" id="vc-name-wrap"><input name="qrName" placeholder=" " maxlength="120" /><span>Name your QR (optional)</span><i class="help" title="Only you see this name, in your Dynamic QR list. Defaults to the contact's name.">?</i></div>
 

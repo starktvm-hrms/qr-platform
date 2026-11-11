@@ -945,6 +945,11 @@ vcForm.addEventListener('input', () => updateVcard());
 vcForm.addEventListener('change', () => updateVcard());
 vcForm.addEventListener('submit', (e) => e.preventDefault());
 $('#vc-static').addEventListener('change', () => { if ($('#vc-static').checked) setVcPreview('qr'); updateVcard(); });
+$('#vc-static-info').addEventListener('click', (e) => {
+  e.preventDefault(); // inside the <label>: don't toggle the checkbox
+  const help = $('#vc-static-help'); help.hidden = !help.hidden;
+  e.currentTarget.setAttribute('aria-expanded', String(!help.hidden));
+});
 $$('#vc-preview-tabs button').forEach((b) => b.addEventListener('click', () => setVcPreview(b.dataset.p)));
 function setVcPreview(p) {
   vcPreview = p;
@@ -960,7 +965,7 @@ function vcActions(html) {
 
 let vcState = { card: null, errors: [], text: '' };
 const updateVcard = debounce(async () => {
-  const isStatic = $('#vc-static').checked && !vcEditId;
+  const isStatic = $('#vc-static').checked;
   const { card, errors } = VCard.normalize(readVcard());
   const text = VCard.build(card, { photo: false });
   vcState = { card, errors, text };
@@ -977,13 +982,13 @@ const updateVcard = debounce(async () => {
 
   $('#vc-card').srcdoc = VCard.renderPage(card, '#');
   $('#vc-name-wrap span').textContent = isStatic ? 'File name (optional)' : 'Name your QR (optional)';
-  $('#vc-static').disabled = !!vcEditId;
 
   const img = $('#vc-qr'), empty = $('#vc-qr-empty'), note = $('#vc-qr-note');
   const style = vcDesign.get();
   const qrData = isStatic ? text : vcShortUrl;
   if (isStatic) {
-    note.textContent = `${text.length} characters stored in the code. The photo isn't included in static codes.` +
+    note.textContent = (vcEditId ? `Static copy: a separate QR made from these details. Your dynamic QR and its link ${vcShortUrl.replace(/^https?:\/\//, '')} aren't changed. ` : '') +
+      `${text.length} characters stored in the code. The photo isn't included in static codes.` +
       (text.length > 600 ? ' Long contacts make a dense code: print it at least 3 cm wide.' : '');
   } else {
     note.innerHTML = vcShortUrl ? `Points to <a href="${esc(vcShortUrl)}" target="_blank" rel="noopener">${esc(vcShortUrl)}</a>. Edits update the card without changing the code.` : '';
@@ -1001,7 +1006,7 @@ const updateVcard = debounce(async () => {
   if (isStatic) {
     vcActions(`<button type="button" class="btn primary" data-vc="png">Download PNG</button>
       <button type="button" class="btn" data-vc="svg">SVG</button><button type="button" class="btn" data-vc="eps">EPS</button><button type="button" class="btn" data-vc="pdf">PDF</button>
-      <button type="button" class="btn" data-vc="vcf">.vcf file</button><button type="button" class="btn" data-vc="savestatic">${vcStaticEditId ? 'Save changes' : 'Save to dashboard'}</button>`);
+      <button type="button" class="btn" data-vc="vcf">.vcf file</button><button type="button" class="btn" data-vc="savestatic">${vcStaticEditId ? 'Save changes' : vcEditId ? 'Save static copy to dashboard' : 'Save to dashboard'}</button>`);
   } else if (vcEditId) {
     vcActions(`<button type="button" class="btn primary" data-vc="save">Save changes</button>
       <button type="button" class="btn" data-vc="png">PNG</button><button type="button" class="btn" data-vc="svg">SVG</button>
@@ -1022,7 +1027,7 @@ async function vcAction(act) {
       if (errors.length) { vcSubmitted = true; updateVcard(); $('#vc-error').scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
     }
     const style = vcDesign.get();
-    const isStatic = $('#vc-static').checked && !vcEditId;
+    const isStatic = $('#vc-static').checked;
     const qrData = isStatic ? text : vcShortUrl;
     const render = { png: renderPng, svg: renderSvg, eps: renderEps, pdf: renderPdf }[act];
     if (render) {
