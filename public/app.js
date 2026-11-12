@@ -534,6 +534,7 @@ function renderDash() {
         <a class="btn sm" href="${href}">Open</a>
         <button class="btn sm" data-dl="png">PNG</button><button class="btn sm" data-dl="svg">SVG</button>
         <button class="btn sm" data-dl="pdf">PDF</button><button class="btn sm" data-dl="eps">EPS</button>
+        ${c.contentType === 'vcard' ? '<button class="btn sm" data-dl="vcf" title="Contact file (.vcf)">VCF</button>' : ''}
       </div>
     </article>`;
   }).join('');
@@ -551,11 +552,22 @@ $('#dash-grid').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-dl]'); if (!b) return;
   const [kind, id] = b.closest('.qcard').dataset.key.split('-');
   try {
+    if (b.dataset.dl === 'vcf') {
+      const full = await api(kind === 'static' ? `/static/${id}` : `/dynamic/${id}`);
+      return downloadVcf(kind === 'static' ? full.fields : full.vcard, full.name);
+    }
     // static codes may carry a centre logo, which the list leaves out, so fetch the full code
     const c = kind === 'static' ? await api(`/static/${id}`) : allCodes.find((x) => x.kind === kind && String(x.id) === id);
     await downloadCode(c.data, styleOf(c), b.dataset.dl, c.name);
   } catch (err) { toast(err.message); }
 });
+
+// The contact itself as a .vcf file (dynamic cards include the photo; static ones never store it).
+function downloadVcf(card, name) {
+  if (!card) throw new Error('No contact details found');
+  const blob = new Blob([VCard.build(card)], { type: 'text/vcard' });
+  download(URL.createObjectURL(blob), `${slugify(name || VCard.fullName(card))}.vcf`);
+}
 
 async function downloadCode(data, style, fmt, name) {
   const render = { png: renderPng, svg: renderSvg, pdf: renderPdf, eps: renderEps }[fmt];
@@ -650,6 +662,7 @@ function detailShell(kind, type, c, { badges = '', meta = [], actions = '', edit
           <button class="btn primary" data-dl="png">PNG</button><button class="btn" data-dl="svg">SVG</button>
           <button class="btn" data-dl="pdf">PDF</button><button class="btn" data-dl="eps">EPS</button>
         </div>
+        ${type === 'vcard' ? '<div class="row dl"><button class="btn" data-dl="vcf">Download vCard (.vcf)</button></div>' : ''}
         ${actions ? `<div class="row">${actions}</div>` : ''}
       </div>
       <div class="panel dinfo">
@@ -681,7 +694,10 @@ async function openDetail(kind, id) {
   if (location.hash !== `#qr/${kind === 'dynamic' ? 'd' : 's'}/${id}`) return; // navigated away meanwhile
   if (kind === 'dynamic') renderDynamicDetail({ ...c, data: c.shortUrl });
   else renderStaticDetail(c);
-  $$('[data-dl]', body).forEach((b) => b.addEventListener('click', () => downloadCode(c.kind === 'static' ? c.data : c.shortUrl, styleOf(c), b.dataset.dl, c.name).catch((e) => toast(e.message))));
+  $$('[data-dl]', body).forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.dl === 'vcf') { try { downloadVcf(kind === 'static' ? c.fields : c.vcard, c.name); } catch (e) { toast(e.message); } return; }
+    downloadCode(kind === 'static' ? c.data : c.shortUrl, styleOf(c), b.dataset.dl, c.name).catch((e) => toast(e.message));
+  }));
   $$('[data-reveal]', body).forEach((b) => b.addEventListener('click', () => {
     const sEl = b.previousElementSibling, shown = b.textContent === 'Hide';
     sEl.textContent = shown ? '••••••••' : sEl.dataset.secret; b.textContent = shown ? 'Show' : 'Hide';
@@ -1006,14 +1022,16 @@ const updateVcard = debounce(async () => {
   if (isStatic) {
     vcActions(`<button type="button" class="btn primary" data-vc="png">Download PNG</button>
       <button type="button" class="btn" data-vc="svg">SVG</button><button type="button" class="btn" data-vc="eps">EPS</button><button type="button" class="btn" data-vc="pdf">PDF</button>
-      <button type="button" class="btn" data-vc="vcf">.vcf file</button><button type="button" class="btn" data-vc="savestatic">${vcStaticEditId ? 'Save changes' : vcEditId ? 'Save static copy to dashboard' : 'Save to dashboard'}</button>`);
+      <button type="button" class="btn" data-vc="vcf">vCard (.vcf)</button><button type="button" class="btn" data-vc="savestatic">${vcStaticEditId ? 'Save changes' : vcEditId ? 'Save static copy to dashboard' : 'Save to dashboard'}</button>`);
   } else if (vcEditId) {
     vcActions(`<button type="button" class="btn primary" data-vc="save">Save changes</button>
       <button type="button" class="btn" data-vc="png">PNG</button><button type="button" class="btn" data-vc="svg">SVG</button>
       <button type="button" class="btn" data-vc="eps">EPS</button><button type="button" class="btn" data-vc="pdf">PDF</button>
+      <button type="button" class="btn" data-vc="vcf">vCard (.vcf)</button>
       <button type="button" class="btn" data-vc="new">New vCard</button>`);
   } else {
-    vcActions(`<button type="button" class="btn primary" data-vc="create">Create vCard QR</button>`);
+    vcActions(`<button type="button" class="btn primary" data-vc="create">Create vCard QR</button>
+      <button type="button" class="btn" data-vc="vcf">vCard (.vcf)</button>`);
   }
 }, 200);
 
@@ -1023,7 +1041,7 @@ async function vcAction(act) {
   const { card, errors, text } = vcState;
   try {
     if (act === 'new') return resetVcard();
-    if (['create', 'save'].includes(act) || $('#vc-static').checked) {
+    if (['create', 'save', 'vcf'].includes(act) || $('#vc-static').checked) {
       if (errors.length) { vcSubmitted = true; updateVcard(); $('#vc-error').scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
     }
     const style = vcDesign.get();
